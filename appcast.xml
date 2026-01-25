@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <channel>
+        <title>SayStuff Updates</title>
+        <link>https://github.com/pashokitsern/say-stuff/releases</link>
+        <description>Most recent updates to SayStuff</description>
+        <language>en</language>
+
+        <!--
+        Add new releases at the top. Example:
+
+        <item>
+            <title>Version 1.1.0</title>
+            <sparkle:version>2</sparkle:version>
+            <sparkle:shortVersionString>1.1.0</sparkle:shortVersionString>
+            <description><![CDATA[
+                <h2>What's New</h2>
+                <ul>
+                    <li>New feature X</li>
+                    <li>Bug fix Y</li>
+                </ul>
+            ]]></description>
+            <pubDate>Mon, 28 Jan 2026 12:00:00 +0000</pubDate>
+            <enclosure
+                url="https://github.com/pashokitsern/say-stuff/releases/download/v1.1.0/SayStuff-1.1.0.zip"
+                sparkle:version="2"
+                sparkle:shortVersionString="1.1.0"
+                length="5000000"
+                type="application/octet-stream" />
+        </item>
+        -->
+
+        <item>
+            <title>Version 1.0.0</title>
+            <sparkle:version>1</sparkle:version>
+            <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
+            <description><![CDATA[
+                <h2>Initial Release</h2>
+                <ul>
+                    <li>Push-to-talk voice transcription</li>
+                    <li>Multiple language profiles</li>
+                    <li>Customizable hotkeys</li>
+                </ul>
+            ]]></description>
+            <pubDate>Fri, 24 Jan 2026 12:00:00 +0000</pubDate>
+            <enclosure
+                url="https://github.com/pashokitsern/say-stuff/releases/download/v1.0.0/SayStuff-1.0.0.zip"
+                sparkle:version="1"
+                sparkle:shortVersionString="1.0.0"
+                length="5000000"
+                type="application/octet-stream" />
+        </item>
+    </channel>
+</rss>
