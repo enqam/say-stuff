@@ -13,8 +13,15 @@ class RecordingOverlay {
     func show(state: RecordingState) {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.viewModel.state = state
-            self.viewModel.message = ""
+
+            // Reset state immediately WITHOUT animation
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                self.viewModel.state = state
+                self.viewModel.message = ""
+                self.viewModel.audioLevel = 0.0
+            }
 
             if self.window == nil {
                 self.createWindow()
@@ -72,11 +79,11 @@ class RecordingOverlay {
         window.ignoresMouseEvents = true
         window.collectionBehavior = [.canJoinAllSpaces, .stationary]
 
-        // Position at bottom center of screen (15% up from bottom)
+        // Position at bottom center of screen (10% up from bottom)
         if let screen = NSScreen.main {
             let screenFrame = screen.visibleFrame
             let x = screenFrame.midX - (windowWidth / 2)
-            let y = screenFrame.minY + (screenFrame.height * 0.15)
+            let y = screenFrame.minY + (screenFrame.height * 0.10)
             window.setFrameOrigin(NSPoint(x: x, y: y))
         }
 
@@ -134,19 +141,19 @@ struct RecordingOverlayView: View {
             switch viewModel.state {
             case .recording:
                 WaveformPill(audioLevel: viewModel.audioLevel)
-                    .transition(.scale.combined(with: .opacity))
+                    .transition(.opacity)
             case .transcribing:
                 LoadingPill()
-                    .transition(.scale.combined(with: .opacity))
+                    .transition(.opacity)
             case .success:
                 ResultPill(message: viewModel.message, isError: false)
-                    .transition(.scale.combined(with: .opacity))
+                    .transition(.opacity)
             case .error:
                 ResultPill(message: viewModel.message, isError: true)
-                    .transition(.scale.combined(with: .opacity))
+                    .transition(.opacity)
             }
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: viewModel.state)
+        .animation(.easeInOut(duration: 0.2), value: viewModel.state)
     }
 }
 
@@ -177,14 +184,42 @@ struct WaveformPill: View {
         .padding(12) // Room for shadow
         .frame(width: 140 + 24, height: 56 + 24)
         .background(
-            Capsule()
-                .fill(Color.black.opacity(0.9))
-                .overlay(
-                    Capsule()
-                        .strokeBorder(Color.red, lineWidth: 3)
-                )
-                .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-                .padding(12)
+            ZStack {
+                // Subtle outer glow
+                Capsule()
+                    .fill(Color(red: 1.0, green: 0.1, blue: 0.1).opacity(0.15))
+                    .blur(radius: 4)
+                    .padding(10)
+
+                // Main pill
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [Color(white: 0.15), Color(white: 0.08)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .overlay(
+                        // Inner highlight
+                        Capsule()
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.15), Color.clear],
+                                    startPoint: .top,
+                                    endPoint: .center
+                                ),
+                                lineWidth: 1
+                            )
+                    )
+                    .overlay(
+                        // Border - bright vivid red
+                        Capsule()
+                            .strokeBorder(Color(red: 1.0, green: 0.1, blue: 0.1), lineWidth: 3)
+                    )
+                    .shadow(color: .black.opacity(0.5), radius: 12, x: 0, y: 6)
+                    .padding(12)
+            }
         )
     }
 }
@@ -203,14 +238,40 @@ struct LoadingPill: View {
         .padding(12)
         .frame(width: 140 + 24, height: 56 + 24)
         .background(
-            Capsule()
-                .fill(Color.black.opacity(0.9))
-                .overlay(
-                    Capsule()
-                        .strokeBorder(Color.orange, lineWidth: 3)
-                )
-                .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-                .padding(12)
+            ZStack {
+                // Subtle outer glow
+                Capsule()
+                    .fill(Color.orange.opacity(0.2))
+                    .blur(radius: 5)
+                    .padding(10)
+
+                // Main pill
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [Color(white: 0.15), Color(white: 0.08)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.15), Color.clear],
+                                    startPoint: .top,
+                                    endPoint: .center
+                                ),
+                                lineWidth: 1
+                            )
+                    )
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(Color.orange, lineWidth: 2.5)
+                    )
+                    .shadow(color: .black.opacity(0.5), radius: 12, x: 0, y: 6)
+                    .padding(12)
+            }
         )
     }
 }
@@ -249,6 +310,10 @@ struct ResultPill: View {
     let message: String
     let isError: Bool
 
+    private var accentColor: Color {
+        isError ? .red : .green
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             if isError {
@@ -267,14 +332,40 @@ struct ResultPill: View {
         .padding(12)
         .frame(width: 140 + 24, height: 56 + 24)
         .background(
-            Capsule()
-                .fill(Color.black.opacity(0.9))
-                .overlay(
-                    Capsule()
-                        .strokeBorder(isError ? Color.red : Color.green, lineWidth: 3)
-                )
-                .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
-                .padding(12)
+            ZStack {
+                // Subtle outer glow
+                Capsule()
+                    .fill(accentColor.opacity(0.2))
+                    .blur(radius: 5)
+                    .padding(10)
+
+                // Main pill
+                Capsule()
+                    .fill(
+                        LinearGradient(
+                            colors: [Color(white: 0.15), Color(white: 0.08)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.15), Color.clear],
+                                    startPoint: .top,
+                                    endPoint: .center
+                                ),
+                                lineWidth: 1
+                            )
+                    )
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(accentColor, lineWidth: 2.5)
+                    )
+                    .shadow(color: .black.opacity(0.5), radius: 12, x: 0, y: 6)
+                    .padding(12)
+            }
         )
     }
 }

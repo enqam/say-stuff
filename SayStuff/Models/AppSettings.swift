@@ -2,8 +2,8 @@ import Foundation
 
 struct AppSettings: Codable {
     var modelSize: WhisperModel = .largeTurbo
-    var whisperPath: String = "/Users/s/whisper.cpp/build/bin/whisper-cli"
-    var modelDirectory: String = "/Users/s/whisper.cpp/models"
+    var whisperPath: String = "/usr/local/bin/whisper-cli"
+    var modelDirectory: String = "~/Library/Application Support/SayStuff/models"
     var selectedAudioDeviceUID: String? = nil  // nil = system default
     var hotkeyModifiers: [String] = ["option", "cmd"]
     var hotkeyKey: String = "v"

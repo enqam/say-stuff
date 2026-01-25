@@ -9,6 +9,9 @@
 
 set -e  # Exit on any error
 
+# Capture script directory BEFORE any cd commands
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Colors for pretty output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -41,7 +44,7 @@ echo ""
 read -p "Press Enter to continue (or Ctrl+C to cancel)..."
 
 # ============================================================================
-step "1/7" "Checking for Homebrew (macOS package manager)"
+step "1/8" "Checking for Homebrew (macOS package manager)"
 # ============================================================================
 
 if command -v brew &> /dev/null; then
@@ -61,7 +64,7 @@ else
 fi
 
 # ============================================================================
-step "2/7" "Installing ffmpeg (audio recording)"
+step "2/8" "Installing ffmpeg (audio recording)"
 # ============================================================================
 
 if command -v ffmpeg &> /dev/null; then
@@ -73,7 +76,7 @@ else
 fi
 
 # ============================================================================
-step "3/7" "Installing Hammerspoon (hotkey automation)"
+step "3/8" "Installing Hammerspoon (hotkey automation)"
 # ============================================================================
 
 if [[ -d "/Applications/Hammerspoon.app" ]] || [[ -d "$HOME/Applications/Hammerspoon.app" ]]; then
@@ -85,7 +88,19 @@ else
 fi
 
 # ============================================================================
-step "4/7" "Building whisper.cpp (AI transcription engine)"
+step "4/8" "Installing cmake (build tool)"
+# ============================================================================
+
+if command -v cmake &> /dev/null; then
+    success "cmake is already installed"
+else
+    info "Installing cmake..."
+    brew install cmake
+    success "cmake installed"
+fi
+
+# ============================================================================
+step "5/8" "Building whisper.cpp (AI transcription engine)"
 # ============================================================================
 
 WHISPER_DIR="$HOME/whisper.cpp"
@@ -108,7 +123,7 @@ else
 fi
 
 # ============================================================================
-step "5/7" "Downloading AI model"
+step "6/8" "Downloading AI model"
 # ============================================================================
 
 echo ""
@@ -166,48 +181,61 @@ else
 fi
 
 # ============================================================================
-step "6/7" "Detecting your microphone"
+step "7/8" "Detecting your microphone"
 # ============================================================================
 
 echo ""
 info "Available microphones on your Mac:"
 echo ""
 
-# Get list of audio input devices
-DEVICES=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep -A 50 "audio devices" | grep "^\[" | head -10)
-echo "$DEVICES"
+# Get list of audio input devices - extract just the device names
+DEVICES_RAW=$(ffmpeg -f avfoundation -list_devices true -i "" 2>&1 | grep -A 50 "audio devices" | grep "^\[" | head -10)
+echo "$DEVICES_RAW"
 echo ""
 
-# Try to auto-detect the default mic
-if echo "$DEVICES" | grep -q "MacBook Pro Microphone"; then
-    DEFAULT_MIC="MacBook Pro Microphone"
-elif echo "$DEVICES" | grep -q "MacBook Air Microphone"; then
-    DEFAULT_MIC="MacBook Air Microphone"
-elif echo "$DEVICES" | grep -q "Built-in Microphone"; then
-    DEFAULT_MIC="Built-in Microphone"
-else
-    DEFAULT_MIC=""
-fi
+# Extract clean device names (remove the [AVFoundation ...] prefix)
+DEVICE_NAMES=$(echo "$DEVICES_RAW" | sed 's/.*\] //' | sed 's/\[.*//')
+
+# Try to auto-detect the built-in mic (check various Mac types)
+DEFAULT_MIC=""
+for mic in "MacBook Pro Microphone" "MacBook Air Microphone" "iMac Microphone" "Mac Mini Microphone" "Mac Studio Microphone" "Mac Pro Microphone" "Built-in Microphone"; do
+    if echo "$DEVICE_NAMES" | grep -q "$mic"; then
+        DEFAULT_MIC="$mic"
+        break
+    fi
+done
 
 if [[ -n "$DEFAULT_MIC" ]]; then
-    info "Detected: ${BOLD}$DEFAULT_MIC${NC}"
+    info "Detected built-in microphone: ${BOLD}$DEFAULT_MIC${NC}"
     read -p "Use this microphone? [Y/n]: " USE_DEFAULT
     USE_DEFAULT=${USE_DEFAULT:-Y}
     if [[ "$USE_DEFAULT" =~ ^[Yy]$ ]]; then
         MIC_NAME="$DEFAULT_MIC"
     else
-        read -p "Enter your microphone name exactly as shown above: " MIC_NAME
+        echo ""
+        echo "Enter the microphone name EXACTLY as shown in the list above."
+        echo "Copy and paste it to avoid typos."
+        read -p "Microphone name: " MIC_NAME
     fi
 else
-    warn "Could not auto-detect microphone."
-    read -p "Enter your microphone name exactly as shown above: " MIC_NAME
+    warn "Could not auto-detect a built-in microphone."
+    echo ""
+    echo "Enter the microphone name EXACTLY as shown in the list above."
+    echo "Copy and paste it to avoid typos."
+    read -p "Microphone name: " MIC_NAME
 fi
 
+# Verify the microphone name was captured
+if [[ -z "$MIC_NAME" ]]; then
+    error "No microphone name provided. Please run the installer again."
+fi
+
+info "Using microphone: ${BOLD}$MIC_NAME${NC}"
+
 # ============================================================================
-step "7/7" "Installing the script"
+step "8/8" "Installing the script"
 # ============================================================================
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HAMMERSPOON_DIR="$HOME/.hammerspoon"
 
 mkdir -p "$HAMMERSPOON_DIR"
