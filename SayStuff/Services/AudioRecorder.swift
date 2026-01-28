@@ -1,145 +1,277 @@
 import AVFoundation
 import CoreAudio
 
-class AudioRecorder: ObservableObject {
-    private var audioEngine: AVAudioEngine?
+class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputSampleBufferDelegate {
+    private var captureSession: AVCaptureSession?
+    private var audioOutput: AVCaptureAudioDataOutput?
     private var audioFile: AVAudioFile?
+    private var audioFileURL: URL?
     private let recPath = "/tmp/saystuff_recording.wav"
+    private let processingQueue = DispatchQueue(label: "com.saystuff.audio", qos: .userInitiated)
 
     @Published var isRecording = false
-    @Published var audioLevel: Float = 0.0  // 0.0 to 1.0
+    @Published var audioLevel: Float = 0.0
 
     func startRecording() throws {
-        guard audioEngine == nil else { return }
+        // Clean up any existing session
+        stopAndCleanup()
 
         // Remove old recording
         try? FileManager.default.removeItem(atPath: recPath)
 
-        // Set system input device BEFORE creating engine
-        if let deviceUID = SettingsManager.shared.settings.selectedAudioDeviceUID,
-           let deviceID = AudioDeviceManager.shared.getDeviceID(forUID: deviceUID) {
-            setSystemInputDevice(deviceID)
-            print("[AudioRecorder] Set system input to device: \(deviceUID)")
-        } else {
-            print("[AudioRecorder] Using system default input device")
-        }
+        // Create capture session
+        let session = AVCaptureSession()
+        session.beginConfiguration()
 
-        // Create fresh engine after device is set
-        let engine = AVAudioEngine()
-        let inputNode = engine.inputNode
-
-        // Get the format AFTER engine is created with correct device
-        let inputFormat = inputNode.outputFormat(forBus: 0)
-
-        guard inputFormat.sampleRate > 0 && inputFormat.channelCount > 0 else {
-            print("[AudioRecorder] Invalid input format: \(inputFormat)")
-            throw AudioRecorderError.invalidFormat
-        }
-
-        print("[AudioRecorder] Input format: \(inputFormat.sampleRate)Hz, \(inputFormat.channelCount)ch")
-
-        // Create output file with matching sample rate
-        let outputURL = URL(fileURLWithPath: recPath)
-
-        audioFile = try AVAudioFile(
-            forWriting: outputURL,
-            settings: [
-                AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: inputFormat.sampleRate,
-                AVNumberOfChannelsKey: 1,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
-                AVLinearPCMIsBigEndianKey: false
-            ]
-        )
-
-        // Install tap using the input node's native format
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            guard let self = self, let audioFile = self.audioFile else { return }
-
-            // Calculate audio level (RMS)
-            if let channelData = buffer.floatChannelData?[0] {
-                let frames = buffer.frameLength
-                var sum: Float = 0
-                for i in 0..<Int(frames) {
-                    let sample = channelData[i]
-                    sum += sample * sample
-                }
-                let rms = sqrt(sum / Float(frames))
-                // Linear scaling first
-                let linearLevel = min(1.0, rms * 25.0)
-                // Non-linear curve: sqrt boosts quiet sounds, compresses loud ones
-                let level = sqrt(linearLevel)
-                DispatchQueue.main.async {
-                    self.audioLevel = level
-                }
-            }
-
-            // Convert to mono if needed
-            let monoBuffer: AVAudioPCMBuffer
-            if buffer.format.channelCount > 1 {
-                guard let mono = AVAudioPCMBuffer(
-                    pcmFormat: AVAudioFormat(
-                        commonFormat: buffer.format.commonFormat,
-                        sampleRate: buffer.format.sampleRate,
-                        channels: 1,
-                        interleaved: false
-                    )!,
-                    frameCapacity: buffer.frameLength
-                ) else { return }
-
-                mono.frameLength = buffer.frameLength
-
-                if let src = buffer.floatChannelData?[0],
-                   let dst = mono.floatChannelData?[0] {
-                    memcpy(dst, src, Int(buffer.frameLength) * MemoryLayout<Float>.size)
-                }
-                monoBuffer = mono
+        // Get the selected device or fall back to default
+        let device: AVCaptureDevice?
+        if let deviceUID = SettingsManager.shared.settings.selectedAudioDeviceUID {
+            // Use AVCaptureDeviceDiscoverySession to find audio devices
+            let discoverySession = AVCaptureDevice.DiscoverySession(
+                deviceTypes: [.builtInMicrophone, .externalUnknown],
+                mediaType: .audio,
+                position: .unspecified
+            )
+            device = discoverySession.devices.first { $0.uniqueID == deviceUID }
+            if device != nil {
+                print("[AudioRecorder] Using selected device: \(device!.localizedName)")
             } else {
-                monoBuffer = buffer
+                print("[AudioRecorder] Selected device not found, using default")
             }
-
-            do {
-                try audioFile.write(from: monoBuffer)
-            } catch {
-                print("[AudioRecorder] Write error: \(error)")
-            }
+        } else {
+            device = nil
         }
 
-        try engine.start()
-        audioEngine = engine
+        // Use selected device or default
+        let audioDevice = device ?? AVCaptureDevice.default(for: .audio)
+
+        guard let audioDevice = audioDevice else {
+            print("[AudioRecorder] No audio input device available")
+            throw AudioRecorderError.deviceSetupFailed
+        }
+
+        print("[AudioRecorder] Recording with: \(audioDevice.localizedName)")
+
+        // Add input
+        let audioInput = try AVCaptureDeviceInput(device: audioDevice)
+        guard session.canAddInput(audioInput) else {
+            throw AudioRecorderError.deviceSetupFailed
+        }
+        session.addInput(audioInput)
+
+        // Add output
+        let output = AVCaptureAudioDataOutput()
+        output.setSampleBufferDelegate(self, queue: processingQueue)
+        guard session.canAddOutput(output) else {
+            throw AudioRecorderError.deviceSetupFailed
+        }
+        session.addOutput(output)
+
+        session.commitConfiguration()
+
+        // We'll create the audio file when we receive the first buffer (to get the correct format)
+        audioFileURL = URL(fileURLWithPath: recPath)
+
+        // Start session
+        session.startRunning()
+        captureSession = session
+        audioOutput = output
         isRecording = true
         print("[AudioRecorder] Recording started")
     }
 
-    private func setSystemInputDevice(_ deviceID: AudioDeviceID) {
-        var deviceIDVar = deviceID
-        var propertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultInputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
+    // Called for each audio buffer from the capture session
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard isRecording else { return }
 
-        let status = AudioObjectSetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &propertyAddress,
-            0,
-            nil,
-            UInt32(MemoryLayout<AudioDeviceID>.size),
-            &deviceIDVar
-        )
+        // Create audio file on first buffer if needed
+        if audioFile == nil, let url = audioFileURL {
+            guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
+            let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc)?.pointee
 
-        if status != noErr {
-            print("[AudioRecorder] Warning: Failed to set system input device: \(status)")
+            if let asbd = asbd {
+                print("[AudioRecorder] Audio format: \(asbd.mSampleRate)Hz, \(asbd.mChannelsPerFrame)ch")
+
+                do {
+                    audioFile = try AVAudioFile(
+                        forWriting: url,
+                        settings: [
+                            AVFormatIDKey: kAudioFormatLinearPCM,
+                            AVSampleRateKey: asbd.mSampleRate,
+                            AVNumberOfChannelsKey: 1,
+                            AVLinearPCMBitDepthKey: 16,
+                            AVLinearPCMIsFloatKey: false,
+                            AVLinearPCMIsBigEndianKey: false
+                        ]
+                    )
+                } catch {
+                    print("[AudioRecorder] Failed to create audio file: \(error)")
+                    return
+                }
+            }
+        }
+
+        guard let audioFile = audioFile else { return }
+
+        // Convert CMSampleBuffer to AVAudioPCMBuffer
+        guard let pcmBuffer = createPCMBuffer(from: sampleBuffer) else { return }
+
+        // Calculate audio level
+        if let channelData = pcmBuffer.floatChannelData?[0] {
+            let frames = pcmBuffer.frameLength
+            var sum: Float = 0
+            for i in 0..<Int(frames) {
+                let sample = channelData[i]
+                sum += sample * sample
+            }
+            let rms = sqrt(sum / Float(frames))
+            let linearLevel = min(1.0, rms * 25.0)
+            let level = sqrt(linearLevel)
+            DispatchQueue.main.async {
+                self.audioLevel = level
+            }
+        }
+
+        // Convert to mono and write
+        let monoBuffer: AVAudioPCMBuffer
+        if pcmBuffer.format.channelCount > 1 {
+            guard let mono = AVAudioPCMBuffer(
+                pcmFormat: AVAudioFormat(
+                    commonFormat: pcmBuffer.format.commonFormat,
+                    sampleRate: pcmBuffer.format.sampleRate,
+                    channels: 1,
+                    interleaved: false
+                )!,
+                frameCapacity: pcmBuffer.frameLength
+            ) else { return }
+
+            mono.frameLength = pcmBuffer.frameLength
+
+            if let src = pcmBuffer.floatChannelData?[0],
+               let dst = mono.floatChannelData?[0] {
+                memcpy(dst, src, Int(pcmBuffer.frameLength) * MemoryLayout<Float>.size)
+            }
+            monoBuffer = mono
+        } else {
+            monoBuffer = pcmBuffer
+        }
+
+        do {
+            try audioFile.write(from: monoBuffer)
+        } catch {
+            print("[AudioRecorder] Write error: \(error)")
         }
     }
 
-    func stopRecording() -> URL? {
-        guard let engine = audioEngine else { return nil }
+    private func createPCMBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
+        guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc)?.pointee else {
+            return nil
+        }
 
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        audioEngine = nil
+        let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
+        guard frameCount > 0 else { return nil }
+
+        guard let format = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: asbd.mSampleRate,
+            channels: AVAudioChannelCount(asbd.mChannelsPerFrame),
+            interleaved: false
+        ) else { return nil }
+
+        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frameCount)) else {
+            return nil
+        }
+        pcmBuffer.frameLength = AVAudioFrameCount(frameCount)
+
+        // Get audio data
+        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return nil }
+
+        var lengthAtOffset: Int = 0
+        var totalLength: Int = 0
+        var dataPointer: UnsafeMutablePointer<Int8>?
+
+        let status = CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: &lengthAtOffset, totalLengthOut: &totalLength, dataPointerOut: &dataPointer)
+        guard status == kCMBlockBufferNoErr, let data = dataPointer else { return nil }
+
+        // Convert based on source format
+        let channelCount = Int(asbd.mChannelsPerFrame)
+
+        if asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0 {
+            // Source is float
+            let floatData = UnsafeRawPointer(data).assumingMemoryBound(to: Float.self)
+            if asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0 {
+                // Non-interleaved float
+                for ch in 0..<channelCount {
+                    if let dst = pcmBuffer.floatChannelData?[ch] {
+                        memcpy(dst, floatData.advanced(by: ch * frameCount), frameCount * MemoryLayout<Float>.size)
+                    }
+                }
+            } else {
+                // Interleaved float - deinterleave
+                for frame in 0..<frameCount {
+                    for ch in 0..<channelCount {
+                        pcmBuffer.floatChannelData?[ch][frame] = floatData[frame * channelCount + ch]
+                    }
+                }
+            }
+        } else if asbd.mBitsPerChannel == 16 {
+            // Source is 16-bit integer
+            let int16Data = UnsafeRawPointer(data).assumingMemoryBound(to: Int16.self)
+            let scale: Float = 1.0 / 32768.0
+
+            if asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0 {
+                // Non-interleaved int16
+                for ch in 0..<channelCount {
+                    if let dst = pcmBuffer.floatChannelData?[ch] {
+                        for frame in 0..<frameCount {
+                            dst[frame] = Float(int16Data[ch * frameCount + frame]) * scale
+                        }
+                    }
+                }
+            } else {
+                // Interleaved int16 - deinterleave and convert
+                for frame in 0..<frameCount {
+                    for ch in 0..<channelCount {
+                        pcmBuffer.floatChannelData?[ch][frame] = Float(int16Data[frame * channelCount + ch]) * scale
+                    }
+                }
+            }
+        } else if asbd.mBitsPerChannel == 32 && asbd.mFormatFlags & kAudioFormatFlagIsSignedInteger != 0 {
+            // Source is 32-bit integer
+            let int32Data = UnsafeRawPointer(data).assumingMemoryBound(to: Int32.self)
+            let scale: Float = 1.0 / 2147483648.0
+
+            for frame in 0..<frameCount {
+                for ch in 0..<channelCount {
+                    pcmBuffer.floatChannelData?[ch][frame] = Float(int32Data[frame * channelCount + ch]) * scale
+                }
+            }
+        } else {
+            print("[AudioRecorder] Unsupported audio format: bits=\(asbd.mBitsPerChannel) flags=\(asbd.mFormatFlags)")
+            return nil
+        }
+
+        return pcmBuffer
+    }
+
+    private func stopAndCleanup() {
+        if let session = captureSession {
+            session.stopRunning()
+        }
+        captureSession = nil
+        audioOutput = nil
+        audioFile = nil
+        audioFileURL = nil
+        isRecording = false
+    }
+
+    func stopRecording() -> URL? {
+        guard captureSession != nil else { return nil }
+
+        captureSession?.stopRunning()
+        captureSession = nil
+        audioOutput = nil
         audioFile = nil
         isRecording = false
 

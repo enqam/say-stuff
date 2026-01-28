@@ -1,0 +1,35 @@
+{
+  "$schema": "https://btca.dev/btca.schema.json",
+  "resources": [
+    {
+      "type": "git",
+      "name": "swiftBook",
+      "url": "https://github.com/apple/swift-book",
+      "branch": "main",
+      "specialNotes": "The Swift Programming Language book - official Swift documentation."
+    },
+    {
+      "type": "git",
+      "name": "whisperCpp",
+      "url": "https://github.com/ggerganov/whisper.cpp",
+      "branch": "master",
+      "specialNotes": "Whisper.cpp - C/C++ port of OpenAI Whisper for local transcription."
+    },
+    {
+      "type": "git",
+      "name": "inferno",
+      "url": "https://github.com/twostraws/Inferno",
+      "branch": "main",
+      "specialNotes": "Paul Hudson's SwiftUI Metal shaders - colorEffect, distortionEffect, layerEffect examples with stitchable syntax (iOS 17+)"
+    },
+    {
+      "type": "git",
+      "name": "swiftUIMetalExamples",
+      "url": "https://github.com/aniket-bane/SwiftUI-Metal",
+      "branch": "main",
+      "specialNotes": "SwiftUI + Metal animated backgrounds including wave/sinebow shaders"
+    }
+  ],
+  "model": "gpt-5.2-codex",
+  "provider": "openai"
+}

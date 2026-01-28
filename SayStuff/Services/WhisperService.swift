@@ -21,7 +21,7 @@ class WhisperService {
 
         // Add prompt if specified
         if let prompt = profile.whisperPrompt, !prompt.isEmpty {
-            arguments += ["-pp", prompt]
+            arguments += ["--prompt", prompt]
         }
 
         // Run whisper-cli

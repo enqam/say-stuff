@@ -71,8 +71,12 @@ struct HotkeySettingsView: View {
                         .cornerRadius(4)
                 }
 
-                Button(isRecording ? "Press your hotkey..." : "Record New Hotkey") {
-                    startRecording()
+                Button(isRecording ? "Cancel" : "Record New Hotkey") {
+                    if isRecording {
+                        stopRecording()
+                    } else {
+                        startRecording()
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(isRecording ? .orange : .accentColor)
@@ -101,9 +105,10 @@ struct HotkeySettingsView: View {
 
     private func startRecording() {
         isRecording = true
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        // Use local monitor (captures when Settings window has focus)
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
             captureHotkey(event: event)
-            return nil // Consume the event
+            return nil // Consume the event so macOS doesn't process it
         }
     }
 
