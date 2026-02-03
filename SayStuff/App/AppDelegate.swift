@@ -15,12 +15,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var whisperService: WhisperService!
     private var pasteService: PasteService!
     private var hotkeyManager: HotkeyManager!
-    private var recordingOverlay: RecordingOverlay!
+    private var screenBorderOverlay: ScreenBorderOverlay!
     private var updateManager: UpdateManager!
+    private var transcriptionQueue: TranscriptionQueue!
 
     // State
     @Published var isRecording = false
-    @Published var isTranscribing = false
+    var isTranscribing = false  // Not @Published - menu bar doesn't need to observe this
     @Published var activeProfile: Profile?
     @Published var selectedLanguage: String = "en"
 
@@ -35,10 +36,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     private var profileManager = ProfileManager.shared
     private var settingsManager = SettingsManager.shared
-    private var recordingStartTime: Date?
-    private var audioLevelCancellable: AnyCancellable?
     private var settingsCancellable: AnyCancellable?
-    private var transcriptionTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Initialize services
@@ -46,8 +44,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         whisperService = WhisperService()
         pasteService = PasteService()
         hotkeyManager = HotkeyManager()
-        recordingOverlay = RecordingOverlay()
+        screenBorderOverlay = ScreenBorderOverlay()
         updateManager = UpdateManager()
+        transcriptionQueue = TranscriptionQueue(pasteService: pasteService)
+
+        // Set up transcription queue callbacks
+        transcriptionQueue.onTranscriptionComplete = { [weak self] transcription in
+            guard let self = self else { return }
+
+            print("[SayStuff] Transcription: \(transcription)")
+
+            self.transcriptionStore.add(transcription)
+
+            if self.settingsManager.settings.playSounds {
+                DispatchQueue.global(qos: .utility).async {
+                    NSSound(named: "Glass")?.play()
+                }
+            }
+
+            self.isTranscribing = false
+            self.updateMenuBarIcon()
+        }
+
+        transcriptionQueue.onTranscriptionFailed = { [weak self] error in
+            guard let self = self else { return }
+
+            print("[SayStuff] Transcription failed: \(error)")
+            self.isTranscribing = false
+            self.updateMenuBarIcon()
+        }
 
         // Set up menu bar
         setupMenuBar()
@@ -167,11 +192,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
     private func setupHotkey() {
         let settings = settingsManager.settings
-        print("[SayStuff] Registering hotkey: \(settings.hotkeyModifiers) + \(settings.hotkeyKey)")
+        print("[SayStuff] Registering hotkey: \(settings.hotkeyModifiers) + keyCode:\(settings.hotkeyKeyCode) mode:\(settings.hotkeyMode)")
 
         hotkeyManager.register(
             modifiers: settings.hotkeyModifiers,
-            key: settings.hotkeyKey,
+            keyCode: settings.hotkeyKeyCode,
+            mode: settings.hotkeyMode,
+            timeout: settings.toggleTimeout,
             onDown: { [weak self] in
                 DispatchQueue.main.async {
                     self?.startRecording()
@@ -186,20 +213,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     }
 
     func startRecording() {
-        // Cancel any pending transcription from a previous quick release
-        transcriptionTask?.cancel()
-        transcriptionTask = nil
-
         guard !isRecording else { return }
 
         print("[SayStuff] Starting recording...")
 
         isRecording = true
-        recordingStartTime = Date()
         updateMenuBarIcon()
 
-        // Show waveform overlay
-        recordingOverlay.show(state: .recording)
+        // Show red screen border
+        screenBorderOverlay.show()
 
         // Play start sound
         if settingsManager.settings.playSounds {
@@ -209,17 +231,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         do {
             try audioRecorder.startRecording()
 
-            // Subscribe to audio level for reactive waveform
-            audioLevelCancellable = audioRecorder.$audioLevel
-                .sink { [weak self] level in
-                    self?.recordingOverlay.updateAudioLevel(level)
-                }
-
             print("[SayStuff] Recording started")
         } catch {
             print("[SayStuff] Failed to start recording: \(error)")
-            recordingOverlay.showError("Mic error")
-            recordingOverlay.hide()
             isRecording = false
             updateMenuBarIcon()
         }
@@ -234,17 +248,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         isTranscribing = true
         updateMenuBarIcon()
 
-        // Stop listening to audio levels
-        audioLevelCancellable?.cancel()
-        audioLevelCancellable = nil
-
-        // Show loading overlay
-        recordingOverlay.update(state: .transcribing)
+        // Hide red screen border
+        screenBorderOverlay.hide()
 
         guard let audioURL = audioRecorder.stopRecording() else {
             print("[SayStuff] No audio captured")
-            recordingOverlay.showError("No audio")
-            recordingOverlay.hide()
             isTranscribing = false
             updateMenuBarIcon()
             return
@@ -252,55 +260,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         print("[SayStuff] Audio saved, transcribing...")
 
-        transcriptionTask = Task {
-            do {
-                let profile = activeProfile ?? Profile.defaultEnglish
-                let transcription = try await whisperService.transcribe(
-                    audioURL: audioURL,
-                    profile: profile,
-                    settings: settingsManager.settings
-                )
-
-                // Check if cancelled before updating UI
-                guard !Task.isCancelled else { return }
-
-                await MainActor.run {
-                    print("[SayStuff] Transcription: \(transcription)")
-
-                    // Calculate stats
-                    let wordCount = transcription.split(separator: " ").count
-                    let duration = Date().timeIntervalSince(recordingStartTime ?? Date())
-
-                    // Show success FIRST (so animation doesn't freeze)
-                    recordingOverlay.showSuccess(wordCount: wordCount, duration: duration)
-                    recordingOverlay.hide()
-
-                    // Paste AFTER UI update
-                    pasteService.pasteText(transcription)
-
-                    // Save to disk
-                    self.transcriptionStore.add(transcription)
-
-                    // Play completion sound (off main thread)
-                    if settingsManager.settings.playSounds {
-                        DispatchQueue.global(qos: .utility).async {
-                            NSSound(named: "Glass")?.play()
-                        }
-                    }
-
-                    isTranscribing = false
-                    updateMenuBarIcon()
-                }
-            } catch {
-                print("[SayStuff] Transcription failed: \(error)")
-                await MainActor.run {
-                    recordingOverlay.showError("Transcription failed")
-                    recordingOverlay.hide()
-                    isTranscribing = false
-                    updateMenuBarIcon()
-                }
-            }
+        // Create the transcription task
+        let task = Task<String, Error> {
+            let profile = activeProfile ?? Profile.defaultEnglish
+            return try await whisperService.transcribe(
+                audioURL: audioURL,
+                profile: profile,
+                settings: settingsManager.settings
+            )
         }
+
+        // Enqueue transcription - queue handles paste and callbacks
+        transcriptionQueue.enqueue(task: task)
     }
 
     private func updateMenuBarIcon() {

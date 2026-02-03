@@ -1,4 +1,17 @@
 import Foundation
+import Carbon.HIToolbox
+
+enum HotkeyMode: String, Codable, CaseIterable {
+    case hold = "hold"
+    case toggle = "toggle"
+
+    var displayName: String {
+        switch self {
+        case .hold: return "Hold to Record"
+        case .toggle: return "Toggle (Press to Start/Stop)"
+        }
+    }
+}
 
 struct AppSettings: Codable {
     var modelSize: WhisperModel = .largeTurbo
@@ -7,6 +20,9 @@ struct AppSettings: Codable {
     var selectedAudioDeviceUID: String? = nil  // nil = system default
     var hotkeyModifiers: [String] = ["option", "cmd"]
     var hotkeyKey: String = "v"
+    var hotkeyKeyCode: UInt16 = UInt16(kVK_ANSI_V)  // Raw keyCode for F-keys etc.
+    var hotkeyMode: HotkeyMode = .hold
+    var toggleTimeout: Double = 30.0  // seconds, for toggle mode
     var showMenuBarIcon: Bool = true
     var playSounds: Bool = true
     var hasCompletedOnboarding: Bool = false
@@ -21,6 +37,9 @@ struct AppSettings: Codable {
         selectedAudioDeviceUID = try container.decodeIfPresent(String.self, forKey: .selectedAudioDeviceUID)
         hotkeyModifiers = try container.decodeIfPresent([String].self, forKey: .hotkeyModifiers) ?? ["option", "cmd"]
         hotkeyKey = try container.decodeIfPresent(String.self, forKey: .hotkeyKey) ?? "v"
+        hotkeyKeyCode = try container.decodeIfPresent(UInt16.self, forKey: .hotkeyKeyCode) ?? UInt16(kVK_ANSI_V)
+        hotkeyMode = try container.decodeIfPresent(HotkeyMode.self, forKey: .hotkeyMode) ?? .hold
+        toggleTimeout = try container.decodeIfPresent(Double.self, forKey: .toggleTimeout) ?? 30.0
         showMenuBarIcon = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? true
         playSounds = try container.decodeIfPresent(Bool.self, forKey: .playSounds) ?? true
         hasCompletedOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false

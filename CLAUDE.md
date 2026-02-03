@@ -7,14 +7,13 @@ SayStuff is a macOS menu bar app for voice-to-text transcription. Press a hotkey
 - `SayStuff/` - Swift/SwiftUI macOS app (Xcode)
   - `App/` - App entry point, AppDelegate
   - `Views/` - SwiftUI views (Settings, Onboarding, MenuBar, etc.)
-  - `Services/` - Core services (AudioRecorder, WhisperService, RecordingOverlay, HotkeyManager)
+  - `Services/` - Core services (AudioRecorder, WhisperService, ScreenBorderOverlay, HotkeyManager)
   - `Models/` - Data models (Profile, AppSettings, WhisperModel)
-  - `Shaders/` - Metal shaders for GPU-accelerated UI
 
 ## Key Components
 
-- **RecordingOverlay**: Floating pill UI with waveform animation during recording
-- **AudioRecorder**: Captures microphone input, calculates audio levels
+- **ScreenBorderOverlay**: Lightweight border around the screen during recording
+- **AudioRecorder**: Captures microphone input
 - **WhisperService**: Local speech-to-text using whisper.cpp
 - **HotkeyManager**: Global hotkey registration
 
@@ -33,3 +32,6 @@ Resources:
 - whisperCpp - whisper.cpp source code for local transcription
 - inferno - Paul Hudson's SwiftUI Metal shaders (colorEffect, distortionEffect, layerEffect with stitchable syntax)
 - swiftUIMetalExamples - SwiftUI + Metal animated backgrounds including wave shaders
+- ezaudio - iOS/macOS audio visualization framework using CALayers with GPU compositing (low-overhead real-time waveform rendering)
+- dswaveform - Swift waveform rendering for iOS/macOS/visionOS with SwiftUI and UIKit implementations
+- swiftuix - Large SwiftUI extensions library with Canvas usage patterns and performance optimizations

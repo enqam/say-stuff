@@ -12,6 +12,12 @@ class HotkeyManager {
     private var registeredKeyCode: CGKeyCode = 0
     private var isKeyDown = false
 
+    // Toggle mode support
+    private var hotkeyMode: HotkeyMode = .hold
+    private var isToggleActive = false
+    private var toggleTimeoutTimer: Timer?
+    private var toggleTimeout: Double = 30.0
+
     // Mask to extract only the modifier keys we care about
     private let modifierMask: CGEventFlags = [.maskCommand, .maskShift, .maskAlternate, .maskControl]
 
@@ -19,9 +25,13 @@ class HotkeyManager {
         unregister()
     }
 
-    func register(modifiers: [String], key: String, onDown: @escaping () -> Void, onUp: @escaping () -> Void) {
+    /// Register hotkey using raw keyCode (preferred for F-keys and special keys)
+    func register(modifiers: [String], keyCode: UInt16, mode: HotkeyMode = .hold, timeout: Double = 30.0, onDown: @escaping () -> Void, onUp: @escaping () -> Void) {
         self.onKeyDown = onDown
         self.onKeyUp = onUp
+        self.hotkeyMode = mode
+        self.toggleTimeout = timeout
+        self.isToggleActive = false
 
         // Convert modifiers to CGEventFlags
         registeredModifiers = []
@@ -40,11 +50,24 @@ class HotkeyManager {
             }
         }
 
-        // Convert key to keycode
-        registeredKeyCode = keyCodeForString(key)
+        // Use raw keyCode directly
+        registeredKeyCode = CGKeyCode(keyCode)
 
-        print("[HotkeyManager] Registering: modifiers=\(modifiers) key=\(key) keyCode=\(registeredKeyCode)")
+        print("[HotkeyManager] Registering: modifiers=\(modifiers) keyCode=\(keyCode) mode=\(mode)")
         print("[HotkeyManager] Registered modifier flags: \(registeredModifiers.rawValue)")
+
+        setupEventTap()
+    }
+
+    /// Legacy register method for backward compatibility (string-based key)
+    func register(modifiers: [String], key: String, onDown: @escaping () -> Void, onUp: @escaping () -> Void) {
+        let keyCode = keyCodeForString(key)
+        register(modifiers: modifiers, keyCode: keyCode, mode: .hold, timeout: 30.0, onDown: onDown, onUp: onUp)
+    }
+
+    private func setupEventTap() {
+        // Clean up any existing tap
+        unregister()
 
         // Create event tap
         let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
@@ -82,6 +105,9 @@ class HotkeyManager {
     }
 
     func unregister() {
+        toggleTimeoutTimer?.invalidate()
+        toggleTimeoutTimer = nil
+
         if let tap = eventTap {
             CGEvent.tapEnable(tap: tap, enable: false)
         }
@@ -112,6 +138,15 @@ class HotkeyManager {
         let modifiersMatch = currentModifiers == registeredModifiers
         let keyMatches = keyCode == registeredKeyCode
 
+        switch hotkeyMode {
+        case .hold:
+            return handleHoldMode(type: type, modifiersMatch: modifiersMatch, keyMatches: keyMatches, flags: flags, event: event)
+        case .toggle:
+            return handleToggleMode(type: type, modifiersMatch: modifiersMatch, keyMatches: keyMatches, event: event)
+        }
+    }
+
+    private func handleHoldMode(type: CGEventType, modifiersMatch: Bool, keyMatches: Bool, flags: CGEventFlags, event: CGEvent) -> Unmanaged<CGEvent>? {
         // Key down
         if type == .keyDown && modifiersMatch && keyMatches {
             if !isKeyDown {
@@ -152,37 +187,87 @@ class HotkeyManager {
         return Unmanaged.passRetained(event)
     }
 
-    private func keyCodeForString(_ key: String) -> CGKeyCode {
-        let keyMap: [String: CGKeyCode] = [
-            "a": CGKeyCode(kVK_ANSI_A),
-            "b": CGKeyCode(kVK_ANSI_B),
-            "c": CGKeyCode(kVK_ANSI_C),
-            "d": CGKeyCode(kVK_ANSI_D),
-            "e": CGKeyCode(kVK_ANSI_E),
-            "f": CGKeyCode(kVK_ANSI_F),
-            "g": CGKeyCode(kVK_ANSI_G),
-            "h": CGKeyCode(kVK_ANSI_H),
-            "i": CGKeyCode(kVK_ANSI_I),
-            "j": CGKeyCode(kVK_ANSI_J),
-            "k": CGKeyCode(kVK_ANSI_K),
-            "l": CGKeyCode(kVK_ANSI_L),
-            "m": CGKeyCode(kVK_ANSI_M),
-            "n": CGKeyCode(kVK_ANSI_N),
-            "o": CGKeyCode(kVK_ANSI_O),
-            "p": CGKeyCode(kVK_ANSI_P),
-            "q": CGKeyCode(kVK_ANSI_Q),
-            "r": CGKeyCode(kVK_ANSI_R),
-            "s": CGKeyCode(kVK_ANSI_S),
-            "t": CGKeyCode(kVK_ANSI_T),
-            "u": CGKeyCode(kVK_ANSI_U),
-            "v": CGKeyCode(kVK_ANSI_V),
-            "w": CGKeyCode(kVK_ANSI_W),
-            "x": CGKeyCode(kVK_ANSI_X),
-            "y": CGKeyCode(kVK_ANSI_Y),
-            "z": CGKeyCode(kVK_ANSI_Z),
-            "space": CGKeyCode(kVK_Space),
+    private func handleToggleMode(type: CGEventType, modifiersMatch: Bool, keyMatches: Bool, event: CGEvent) -> Unmanaged<CGEvent>? {
+        // Only respond to keyDown for toggle mode
+        if type == .keyDown && modifiersMatch && keyMatches {
+            if !isToggleActive {
+                // First press: start recording
+                isToggleActive = true
+                print("[HotkeyManager] Toggle ON - starting recording")
+                DispatchQueue.main.async { [weak self] in
+                    self?.onKeyDown?()
+                    self?.startToggleTimeout()
+                }
+            } else {
+                // Second press: stop recording
+                stopToggle()
+            }
+            // Consume the event
+            return nil
+        }
+
+        // Pass through all other events
+        return Unmanaged.passRetained(event)
+    }
+
+    private func startToggleTimeout() {
+        toggleTimeoutTimer?.invalidate()
+        toggleTimeoutTimer = Timer.scheduledTimer(withTimeInterval: toggleTimeout, repeats: false) { [weak self] _ in
+            print("[HotkeyManager] Toggle timeout reached, stopping recording")
+            self?.stopToggle()
+        }
+    }
+
+    private func stopToggle() {
+        guard isToggleActive else { return }
+        isToggleActive = false
+        toggleTimeoutTimer?.invalidate()
+        toggleTimeoutTimer = nil
+        print("[HotkeyManager] Toggle OFF - stopping recording")
+        DispatchQueue.main.async { [weak self] in
+            self?.onKeyUp?()
+        }
+    }
+
+    private func keyCodeForString(_ key: String) -> UInt16 {
+        let keyMap: [String: UInt16] = [
+            "a": UInt16(kVK_ANSI_A),
+            "b": UInt16(kVK_ANSI_B),
+            "c": UInt16(kVK_ANSI_C),
+            "d": UInt16(kVK_ANSI_D),
+            "e": UInt16(kVK_ANSI_E),
+            "f": UInt16(kVK_ANSI_F),
+            "g": UInt16(kVK_ANSI_G),
+            "h": UInt16(kVK_ANSI_H),
+            "i": UInt16(kVK_ANSI_I),
+            "j": UInt16(kVK_ANSI_J),
+            "k": UInt16(kVK_ANSI_K),
+            "l": UInt16(kVK_ANSI_L),
+            "m": UInt16(kVK_ANSI_M),
+            "n": UInt16(kVK_ANSI_N),
+            "o": UInt16(kVK_ANSI_O),
+            "p": UInt16(kVK_ANSI_P),
+            "q": UInt16(kVK_ANSI_Q),
+            "r": UInt16(kVK_ANSI_R),
+            "s": UInt16(kVK_ANSI_S),
+            "t": UInt16(kVK_ANSI_T),
+            "u": UInt16(kVK_ANSI_U),
+            "v": UInt16(kVK_ANSI_V),
+            "w": UInt16(kVK_ANSI_W),
+            "x": UInt16(kVK_ANSI_X),
+            "y": UInt16(kVK_ANSI_Y),
+            "z": UInt16(kVK_ANSI_Z),
+            "space": UInt16(kVK_Space),
+            // F-keys for backward compatibility
+            "f1": UInt16(kVK_F1), "f2": UInt16(kVK_F2), "f3": UInt16(kVK_F3),
+            "f4": UInt16(kVK_F4), "f5": UInt16(kVK_F5), "f6": UInt16(kVK_F6),
+            "f7": UInt16(kVK_F7), "f8": UInt16(kVK_F8), "f9": UInt16(kVK_F9),
+            "f10": UInt16(kVK_F10), "f11": UInt16(kVK_F11), "f12": UInt16(kVK_F12),
+            "f13": UInt16(kVK_F13), "f14": UInt16(kVK_F14), "f15": UInt16(kVK_F15),
+            "f16": UInt16(kVK_F16), "f17": UInt16(kVK_F17), "f18": UInt16(kVK_F18),
+            "f19": UInt16(kVK_F19), "f20": UInt16(kVK_F20),
         ]
 
-        return keyMap[key.lowercased()] ?? CGKeyCode(kVK_ANSI_V)
+        return keyMap[key.lowercased()] ?? UInt16(kVK_ANSI_V)
     }
 }

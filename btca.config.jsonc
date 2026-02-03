@@ -28,8 +28,29 @@
       "url": "https://github.com/aniket-bane/SwiftUI-Metal",
       "branch": "main",
       "specialNotes": "SwiftUI + Metal animated backgrounds including wave/sinebow shaders"
+    },
+    {
+      "type": "git",
+      "name": "ezaudio",
+      "url": "https://github.com/syedhali/EZAudio",
+      "branch": "master",
+      "specialNotes": "iOS/macOS audio visualization framework using CALayers with GPU compositing - low-overhead real-time waveform rendering"
+    },
+    {
+      "type": "git",
+      "name": "dswaveform",
+      "url": "https://github.com/dmrschmidt/DSWaveformImage",
+      "branch": "main",
+      "specialNotes": "Swift waveform rendering for iOS/macOS/visionOS - SwiftUI and UIKit implementations, WaveformAnalyzer for sample access"
+    },
+    {
+      "type": "git",
+      "name": "swiftuix",
+      "url": "https://github.com/SwiftUIX/SwiftUIX",
+      "branch": "master",
+      "specialNotes": "Large SwiftUI extensions library - may have Canvas usage patterns and performance optimizations"
     }
   ],
-  "model": "gpt-5.2-codex",
+  "model": "gpt-5.2",
   "provider": "openai"
 }

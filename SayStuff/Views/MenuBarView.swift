@@ -1,4 +1,5 @@
 import SwiftUI
+import Carbon.HIToolbox
 
 enum MenuTab: String, CaseIterable {
     case main = "Main"
@@ -1194,7 +1195,7 @@ struct HotkeySettingsContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("PUSH-TO-TALK")
+            Text("HOTKEY")
                 .font(.system(size: 11, weight: .bold, design: .rounded))
                 .foregroundColor(DS.textMuted)
                 .tracking(1)
@@ -1225,7 +1226,7 @@ struct HotkeySettingsContent: View {
                 HStack {
                     Image(systemName: isRecording ? "stop.circle.fill" : "record.circle")
                         .font(.system(size: 15))
-                    Text(isRecording ? "Press keys..." : "Change Hotkey")
+                    Text(isRecording ? "Press any key..." : "Change Hotkey")
                         .font(.system(size: 14, weight: .semibold, design: .rounded))
                 }
                 .foregroundColor(isRecording ? DS.warning : DS.accent)
@@ -1243,9 +1244,63 @@ struct HotkeySettingsContent: View {
             .buttonStyle(.plain)
             .focusable(false)
 
-            Text("Hold to record, release to transcribe and paste.")
+            // Mode selector
+            Text("MODE")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundColor(DS.textMuted)
+                .tracking(1)
+                .padding(.top, 8)
+
+            HStack(spacing: 8) {
+                ForEach(HotkeyMode.allCases, id: \.self) { mode in
+                    ModeButton(
+                        title: mode == .hold ? "Hold" : "Toggle",
+                        isSelected: settingsManager.settings.hotkeyMode == mode,
+                        action: { settingsManager.settings.hotkeyMode = mode }
+                    )
+                }
+            }
+
+            if settingsManager.settings.hotkeyMode == .toggle {
+                HStack {
+                    Text("Auto-stop:")
+                        .font(.system(size: 13, design: .rounded))
+                        .foregroundColor(DS.textSecondary)
+
+                    Slider(value: $settingsManager.settings.toggleTimeout, in: 60...600, step: 30)
+                        .tint(DS.accent)
+
+                    Text("\(Int(settingsManager.settings.toggleTimeout / 60))m")
+                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .foregroundColor(DS.textMuted)
+                        .frame(width: 30, alignment: .trailing)
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(DS.bgElevated)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(DS.borderSubtle, lineWidth: 1)
+                )
+            }
+
+            Text(helpText)
                 .font(.system(size: 13, design: .rounded))
                 .foregroundColor(DS.textMuted)
+        }
+        .onDisappear {
+            stopRecording()
+        }
+    }
+
+    private var helpText: String {
+        switch settingsManager.settings.hotkeyMode {
+        case .hold:
+            return "Hold to record, release to transcribe and paste."
+        case .toggle:
+            return "Press once to start, press again to stop and transcribe."
         }
     }
 
@@ -1256,8 +1311,52 @@ struct HotkeySettingsContent: View {
         if mods.contains("option") { parts.append("⌥") }
         if mods.contains("shift") { parts.append("⇧") }
         if mods.contains("cmd") { parts.append("⌘") }
-        parts.append(settingsManager.settings.hotkeyKey.uppercased())
+        parts.append(keyNameFromKeyCode(settingsManager.settings.hotkeyKeyCode))
         return parts.joined()
+    }
+
+    /// Convert keyCode to human-readable name
+    private func keyNameFromKeyCode(_ keyCode: UInt16) -> String {
+        // F-keys
+        let fKeyMap: [UInt16: String] = [
+            UInt16(kVK_F1): "F1", UInt16(kVK_F2): "F2", UInt16(kVK_F3): "F3",
+            UInt16(kVK_F4): "F4", UInt16(kVK_F5): "F5", UInt16(kVK_F6): "F6",
+            UInt16(kVK_F7): "F7", UInt16(kVK_F8): "F8", UInt16(kVK_F9): "F9",
+            UInt16(kVK_F10): "F10", UInt16(kVK_F11): "F11", UInt16(kVK_F12): "F12",
+            UInt16(kVK_F13): "F13", UInt16(kVK_F14): "F14", UInt16(kVK_F15): "F15",
+            UInt16(kVK_F16): "F16", UInt16(kVK_F17): "F17", UInt16(kVK_F18): "F18",
+            UInt16(kVK_F19): "F19", UInt16(kVK_F20): "F20",
+        ]
+        if let fKey = fKeyMap[keyCode] { return fKey }
+
+        // Special keys
+        let specialMap: [UInt16: String] = [
+            UInt16(kVK_Space): "Space",
+            UInt16(kVK_Return): "Return",
+            UInt16(kVK_Tab): "Tab",
+            UInt16(kVK_Escape): "Esc",
+            UInt16(kVK_Delete): "Delete",
+            UInt16(kVK_ForwardDelete): "Fwd Del",
+        ]
+        if let special = specialMap[keyCode] { return special }
+
+        // Letter keys (A-Z)
+        let letterMap: [UInt16: String] = [
+            UInt16(kVK_ANSI_A): "A", UInt16(kVK_ANSI_B): "B", UInt16(kVK_ANSI_C): "C",
+            UInt16(kVK_ANSI_D): "D", UInt16(kVK_ANSI_E): "E", UInt16(kVK_ANSI_F): "F",
+            UInt16(kVK_ANSI_G): "G", UInt16(kVK_ANSI_H): "H", UInt16(kVK_ANSI_I): "I",
+            UInt16(kVK_ANSI_J): "J", UInt16(kVK_ANSI_K): "K", UInt16(kVK_ANSI_L): "L",
+            UInt16(kVK_ANSI_M): "M", UInt16(kVK_ANSI_N): "N", UInt16(kVK_ANSI_O): "O",
+            UInt16(kVK_ANSI_P): "P", UInt16(kVK_ANSI_Q): "Q", UInt16(kVK_ANSI_R): "R",
+            UInt16(kVK_ANSI_S): "S", UInt16(kVK_ANSI_T): "T", UInt16(kVK_ANSI_U): "U",
+            UInt16(kVK_ANSI_V): "V", UInt16(kVK_ANSI_W): "W", UInt16(kVK_ANSI_X): "X",
+            UInt16(kVK_ANSI_Y): "Y", UInt16(kVK_ANSI_Z): "Z",
+        ]
+        if let letter = letterMap[keyCode] { return letter }
+
+        // Fallback: use the legacy hotkeyKey string if available
+        let legacyKey = settingsManager.settings.hotkeyKey.uppercased()
+        return legacyKey.isEmpty ? "?" : legacyKey
     }
 
     private func toggleRecording() {
@@ -1271,7 +1370,7 @@ struct HotkeySettingsContent: View {
     private func startRecording() {
         isRecording = true
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            captureHotkey(event: event)
+            self.captureHotkey(event: event)
             return nil
         }
     }
@@ -1292,13 +1391,46 @@ struct HotkeySettingsContent: View {
         if event.modifierFlags.contains(.option) { modifiers.append("option") }
         if event.modifierFlags.contains(.control) { modifiers.append("control") }
 
-        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        // Use raw keyCode instead of charactersIgnoringModifiers
+        // This correctly captures F-keys and other special keys
+        let keyCode = event.keyCode
 
-        if !modifiers.isEmpty && !key.isEmpty {
-            settingsManager.settings.hotkeyModifiers = modifiers
-            settingsManager.settings.hotkeyKey = key
-            stopRecording()
+        // Accept any key (with or without modifiers)
+        // F-keys work standalone, letters typically need modifiers
+        settingsManager.settings.hotkeyModifiers = modifiers
+        settingsManager.settings.hotkeyKeyCode = keyCode
+        // Also update legacy hotkeyKey for backward compatibility
+        settingsManager.settings.hotkeyKey = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        stopRecording()
+    }
+}
+
+struct ModeButton: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 14, weight: isSelected ? .bold : .medium, design: .rounded))
+                .foregroundColor(isSelected ? DS.textPrimary : DS.textSecondary)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isSelected ? DS.accent.opacity(0.2) : (isHovering ? DS.bgHover : DS.bgElevated))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(isSelected ? DS.accent.opacity(0.4) : DS.borderSubtle, lineWidth: 1)
+                )
         }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .onHover { isHovering = $0 }
     }
 }
 

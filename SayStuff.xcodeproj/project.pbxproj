@@ -7,8 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		12011A922F2EB4AB00A29F5B /* TranscriptionQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12011A912F2EB4AB00A29F5B /* TranscriptionQueue.swift */; };
 		1238F6F52F255C88006BF7BD /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 1238F6F42F255C88006BF7BD /* Sparkle */; };
-		126C7D962F29B6580054433E /* WaveformShader.metal in Sources */ = {isa = PBXBuildFile; fileRef = 126C7D942F29B6580054433E /* WaveformShader.metal */; };
+		12D6DFFF2F2E3D9D00D0FBDA /* ScreenBorderOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12D6DFFE2F2E3D9D00D0FBDA /* ScreenBorderOverlay.swift */; };
 		12E688CA2F26D91B00DBCAB4 /* TranscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E688C92F26D91B00DBCAB4 /* TranscriptionStore.swift */; };
 		12E688CC2F26D92600DBCAB4 /* TranscriptionsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E688CB2F26D92600DBCAB4 /* TranscriptionsView.swift */; };
 		A1000001 /* SayStuffApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000001 /* SayStuffApp.swift */; };
@@ -25,13 +26,13 @@
 		A1000012 /* Profile.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000012 /* Profile.swift */; };
 		A1000013 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000013 /* AppSettings.swift */; };
 		A1000014 /* WhisperModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000014 /* WhisperModel.swift */; };
-		A1000015 /* RecordingOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000017 /* RecordingOverlay.swift */; };
 		A1000016 /* AudioDeviceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000018 /* AudioDeviceManager.swift */; };
 		A1000017 /* UpdateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000019 /* UpdateManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		126C7D942F29B6580054433E /* WaveformShader.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = WaveformShader.metal; sourceTree = "<group>"; };
+		12011A912F2EB4AB00A29F5B /* TranscriptionQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionQueue.swift; sourceTree = "<group>"; };
+		12D6DFFE2F2E3D9D00D0FBDA /* ScreenBorderOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenBorderOverlay.swift; sourceTree = "<group>"; };
 		12E688C92F26D91B00DBCAB4 /* TranscriptionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionStore.swift; sourceTree = "<group>"; };
 		12E688CB2F26D92600DBCAB4 /* TranscriptionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptionsView.swift; sourceTree = "<group>"; };
 		A2000001 /* SayStuffApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SayStuffApp.swift; sourceTree = "<group>"; };
@@ -50,7 +51,6 @@
 		A2000014 /* WhisperModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperModel.swift; sourceTree = "<group>"; };
 		A2000015 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A2000016 /* SayStuff.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SayStuff.entitlements; sourceTree = "<group>"; };
-		A2000017 /* RecordingOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecordingOverlay.swift; sourceTree = "<group>"; };
 		A2000018 /* AudioDeviceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioDeviceManager.swift; sourceTree = "<group>"; };
 		A2000019 /* UpdateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateManager.swift; sourceTree = "<group>"; };
 		A3000001 /* SayStuff.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SayStuff.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -68,14 +68,6 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		126C7D952F29B6580054433E /* Shaders */ = {
-			isa = PBXGroup;
-			children = (
-				126C7D942F29B6580054433E /* WaveformShader.metal */,
-			);
-			path = Shaders;
-			sourceTree = "<group>";
-		};
 		A5000001 = {
 			isa = PBXGroup;
 			children = (
@@ -87,7 +79,6 @@
 		A5000002 /* SayStuff */ = {
 			isa = PBXGroup;
 			children = (
-				126C7D952F29B6580054433E /* Shaders */,
 				A5000003 /* App */,
 				A5000004 /* Views */,
 				A5000005 /* Services */,
@@ -123,12 +114,13 @@
 		A5000005 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				12011A912F2EB4AB00A29F5B /* TranscriptionQueue.swift */,
+				12D6DFFE2F2E3D9D00D0FBDA /* ScreenBorderOverlay.swift */,
 				A2000007 /* AudioRecorder.swift */,
 				A2000008 /* WhisperService.swift */,
 				A2000009 /* HotkeyManager.swift */,
 				A2000010 /* PasteService.swift */,
 				A2000011 /* ModelDownloader.swift */,
-				A2000017 /* RecordingOverlay.swift */,
 				A2000018 /* AudioDeviceManager.swift */,
 				A2000019 /* UpdateManager.swift */,
 			);
@@ -233,6 +225,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				12E688CA2F26D91B00DBCAB4 /* TranscriptionStore.swift in Sources */,
+				12D6DFFF2F2E3D9D00D0FBDA /* ScreenBorderOverlay.swift in Sources */,
 				A1000001 /* SayStuffApp.swift in Sources */,
 				A1000002 /* AppDelegate.swift in Sources */,
 				A1000003 /* MenuBarView.swift in Sources */,
@@ -246,9 +239,8 @@
 				A1000011 /* ModelDownloader.swift in Sources */,
 				A1000012 /* Profile.swift in Sources */,
 				A1000013 /* AppSettings.swift in Sources */,
+				12011A922F2EB4AB00A29F5B /* TranscriptionQueue.swift in Sources */,
 				A1000014 /* WhisperModel.swift in Sources */,
-				126C7D962F29B6580054433E /* WaveformShader.metal in Sources */,
-				A1000015 /* RecordingOverlay.swift in Sources */,
 				A1000016 /* AudioDeviceManager.swift in Sources */,
 				12E688CC2F26D92600DBCAB4 /* TranscriptionsView.swift in Sources */,
 				A1000017 /* UpdateManager.swift in Sources */,

@@ -350,7 +350,7 @@ struct CompleteStep: View {
                 .font(.largeTitle)
                 .fontWeight(.bold)
 
-            Text("Hold ⌘⇧V to start recording")
+            Text("Hold Option+Command+V to start recording")
                 .font(.title3)
                 .foregroundColor(.secondary)
 
