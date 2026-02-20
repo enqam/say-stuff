@@ -1,6 +1,22 @@
 import Foundation
 import Carbon.HIToolbox
 
+struct SupportedLanguage: Identifiable {
+    let code: String
+    let shortLabel: String
+    let name: String
+    var id: String { code }
+}
+
+let allSupportedLanguages: [SupportedLanguage] = [
+    SupportedLanguage(code: "auto", shortLabel: "AUTO", name: "Auto-detect"),
+    SupportedLanguage(code: "en", shortLabel: "EN", name: "English"),
+    SupportedLanguage(code: "ru", shortLabel: "RU", name: "Russian"),
+    SupportedLanguage(code: "es", shortLabel: "ES", name: "Spanish"),
+    SupportedLanguage(code: "fr", shortLabel: "FR", name: "French"),
+    SupportedLanguage(code: "de", shortLabel: "DE", name: "German"),
+]
+
 enum HotkeyMode: String, Codable, CaseIterable {
     case hold = "hold"
     case toggle = "toggle"
@@ -27,6 +43,9 @@ struct AppSettings: Codable {
     var playSounds: Bool = true
     var hasCompletedOnboarding: Bool = false
     var showLogoInMenu: Bool = true
+    var menuLanguages: [String] = ["en", "ru", "auto"]
+    var attenuateAudio: Bool = true
+    var attenuationLevel: Float = 0.25
 
     // Custom decoder that handles missing keys gracefully
     init(from decoder: Decoder) throws {
@@ -44,6 +63,9 @@ struct AppSettings: Codable {
         playSounds = try container.decodeIfPresent(Bool.self, forKey: .playSounds) ?? true
         hasCompletedOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false
         showLogoInMenu = try container.decodeIfPresent(Bool.self, forKey: .showLogoInMenu) ?? true
+        menuLanguages = try container.decodeIfPresent([String].self, forKey: .menuLanguages) ?? ["en", "ru", "auto"]
+        attenuateAudio = try container.decodeIfPresent(Bool.self, forKey: .attenuateAudio) ?? true
+        attenuationLevel = try container.decodeIfPresent(Float.self, forKey: .attenuationLevel) ?? 0.25
     }
 
     // Default initializer
@@ -92,11 +114,15 @@ class SettingsManager: ObservableObject {
         }
 
         // Auto-locate whisper-cli if saved path doesn't exist
-        if !FileManager.default.fileExists(atPath: settings.whisperPath) {
+        let expandedWhisperPath = (settings.whisperPath as NSString).expandingTildeInPath
+        if !FileManager.default.isExecutableFile(atPath: expandedWhisperPath) {
             if let foundPath = Self.findWhisperCLI() {
                 settings.whisperPath = foundPath
                 print("[SettingsManager] Auto-located whisper-cli at: \(foundPath)")
             }
+        } else if settings.whisperPath != expandedWhisperPath {
+            // Normalize "~" to an absolute path so Process() can execute it
+            settings.whisperPath = expandedWhisperPath
         }
 
         // Auto-locate models directory if current one is empty or doesn't exist
@@ -133,9 +159,14 @@ class SettingsManager: ObservableObject {
     static func findWhisperCLI() -> String? {
         let fm = FileManager.default
 
+        // Prefer a bundled whisper-cli if present (for self-contained releases)
+        if let bundled = bundledWhisperCLIPath(), fm.isExecutableFile(atPath: bundled) {
+            return bundled
+        }
+
         for path in whisperSearchPaths {
             let expanded = (path as NSString).expandingTildeInPath
-            if fm.fileExists(atPath: expanded) {
+            if fm.isExecutableFile(atPath: expanded) {
                 return expanded
             }
         }
@@ -153,7 +184,7 @@ class SettingsManager: ObservableObject {
             process.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !output.isEmpty, fm.fileExists(atPath: output) {
+               !output.isEmpty, fm.isExecutableFile(atPath: output) {
                 return output
             }
         } catch {}
@@ -166,9 +197,13 @@ class SettingsManager: ObservableObject {
         let fm = FileManager.default
         var found: [String] = []
 
+        if let bundled = bundledWhisperCLIPath(), fm.isExecutableFile(atPath: bundled) {
+            found.append(bundled)
+        }
+
         for path in whisperSearchPaths {
             let expanded = (path as NSString).expandingTildeInPath
-            if fm.fileExists(atPath: expanded) {
+            if fm.isExecutableFile(atPath: expanded) {
                 found.append(expanded)
             }
         }
@@ -186,12 +221,19 @@ class SettingsManager: ObservableObject {
             process.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
             if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !output.isEmpty, fm.fileExists(atPath: output), !found.contains(output) {
+               !output.isEmpty, fm.isExecutableFile(atPath: output), !found.contains(output) {
                 found.append(output)
             }
         } catch {}
 
         return found
+    }
+
+    private static func bundledWhisperCLIPath() -> String? {
+        let fm = FileManager.default
+        guard let resourceURL = Bundle.main.resourceURL else { return nil }
+        let path = resourceURL.appendingPathComponent("whisper-cli").path
+        return fm.fileExists(atPath: path) ? path : nil
     }
 
     private func save() {
@@ -205,7 +247,7 @@ class SettingsManager: ObservableObject {
     }
 
     var whisperBinaryPath: String {
-        settings.whisperPath
+        (settings.whisperPath as NSString).expandingTildeInPath
     }
 
     var expandedModelDirectory: URL {

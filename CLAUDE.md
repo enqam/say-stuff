@@ -23,8 +23,8 @@ When you need up-to-date information about technologies used in this project—o
 
 Run:
 
-- `btca ask --resource <resource> --question "<question>"`
-- Use multiple `-r` flags to query multiple resources at once
+- `btca ask -r <resource> -q "<question>" --sub-agent`
+- Multiple resources: `btca ask -r <r1> -r <r2> -q "<question>" --sub-agent`
 
 Resources:
 
@@ -35,3 +35,4 @@ Resources:
 - ezaudio - iOS/macOS audio visualization framework using CALayers with GPU compositing (low-overhead real-time waveform rendering)
 - dswaveform - Swift waveform rendering for iOS/macOS/visionOS with SwiftUI and UIKit implementations
 - swiftuix - Large SwiftUI extensions library with Canvas usage patterns and performance optimizations
+- tca - Swift Composable Architecture (TCA) — SwiftUI architecture, state management, side effects, navigation, testing patterns

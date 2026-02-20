@@ -255,7 +255,7 @@ struct PermissionsStep: View {
                 PermissionRow(
                     icon: "keyboard",
                     title: "Accessibility",
-                    description: "Required for global hotkeys",
+                    description: "Required for auto‑paste into other apps",
                     isGranted: hasAccessibility,
                     onRequest: requestAccessibility
                 )

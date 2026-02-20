@@ -1,16 +1,12 @@
-import Cocoa
+import Foundation
 import Carbon.HIToolbox
 
 class HotkeyManager {
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    private var hotKeyRef: EventHotKeyRef?
+    private var eventHandlerRef: EventHandlerRef?
 
     private var onKeyDown: (() -> Void)?
     private var onKeyUp: (() -> Void)?
-
-    private var registeredModifiers: CGEventFlags = []
-    private var registeredKeyCode: CGKeyCode = 0
-    private var isKeyDown = false
 
     // Toggle mode support
     private var hotkeyMode: HotkeyMode = .hold
@@ -18,8 +14,10 @@ class HotkeyManager {
     private var toggleTimeoutTimer: Timer?
     private var toggleTimeout: Double = 30.0
 
-    // Mask to extract only the modifier keys we care about
-    private let modifierMask: CGEventFlags = [.maskCommand, .maskShift, .maskAlternate, .maskControl]
+    private var registeredModifiers: UInt32 = 0
+    private var registeredKeyCode: UInt32 = 0
+
+    private let hotKeyID = EventHotKeyID(signature: OSType(0x53595354), id: 1) // "SYST"
 
     deinit {
         unregister()
@@ -33,30 +31,32 @@ class HotkeyManager {
         self.toggleTimeout = timeout
         self.isToggleActive = false
 
-        // Convert modifiers to CGEventFlags
-        registeredModifiers = []
+        unregister()
+
+        // Convert modifiers to Carbon modifiers
+        registeredModifiers = 0
         for mod in modifiers {
             switch mod.lowercased() {
             case "cmd", "command":
-                registeredModifiers.insert(.maskCommand)
+                registeredModifiers |= UInt32(cmdKey)
             case "shift":
-                registeredModifiers.insert(.maskShift)
+                registeredModifiers |= UInt32(shiftKey)
             case "option", "alt":
-                registeredModifiers.insert(.maskAlternate)
+                registeredModifiers |= UInt32(optionKey)
             case "control", "ctrl":
-                registeredModifiers.insert(.maskControl)
+                registeredModifiers |= UInt32(controlKey)
             default:
                 break
             }
         }
 
-        // Use raw keyCode directly
-        registeredKeyCode = CGKeyCode(keyCode)
+        registeredKeyCode = UInt32(keyCode)
 
         print("[HotkeyManager] Registering: modifiers=\(modifiers) keyCode=\(keyCode) mode=\(mode)")
-        print("[HotkeyManager] Registered modifier flags: \(registeredModifiers.rawValue)")
+        print("[HotkeyManager] Registered modifier flags: \(registeredModifiers)")
 
-        setupEventTap()
+        installEventHandler()
+        registerHotKey()
     }
 
     /// Legacy register method for backward compatibility (string-based key)
@@ -65,149 +65,86 @@ class HotkeyManager {
         register(modifiers: modifiers, keyCode: keyCode, mode: .hold, timeout: 30.0, onDown: onDown, onUp: onUp)
     }
 
-    private func setupEventTap() {
-        // Clean up any existing tap
-        unregister()
-
-        // Create event tap
-        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.keyUp.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
-
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .defaultTap,
-            eventsOfInterest: CGEventMask(eventMask),
-            callback: { proxy, type, event, refcon in
-                guard let refcon = refcon else { return Unmanaged.passRetained(event) }
-                let manager = Unmanaged<HotkeyManager>.fromOpaque(refcon).takeUnretainedValue()
-                return manager.handleEvent(proxy: proxy, type: type, event: event)
-            },
-            userInfo: Unmanaged.passUnretained(self).toOpaque()
-        ) else {
-            print("[HotkeyManager] ERROR: Failed to create event tap!")
-            print("[HotkeyManager] Make sure Accessibility permission is granted for THIS app")
-            print("[HotkeyManager] System Preferences > Privacy & Security > Accessibility")
-            return
-        }
-
-        print("[HotkeyManager] Event tap created successfully")
-
-        eventTap = tap
-        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-
-        if let source = runLoopSource {
-            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-            print("[HotkeyManager] Added to main run loop")
-        }
-
-        CGEvent.tapEnable(tap: tap, enable: true)
-        print("[HotkeyManager] Event tap enabled - ready!")
-    }
-
     func unregister() {
         toggleTimeoutTimer?.invalidate()
         toggleTimeoutTimer = nil
 
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
+        if let hotKeyRef {
+            UnregisterEventHotKey(hotKeyRef)
+            self.hotKeyRef = nil
         }
 
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+        if let eventHandlerRef {
+            RemoveEventHandler(eventHandlerRef)
+            self.eventHandlerRef = nil
         }
-
-        eventTap = nil
-        runLoopSource = nil
     }
 
-    private func handleEvent(proxy: CGEventTapProxy, type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        // Re-enable tap if it gets disabled
-        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            print("[HotkeyManager] Tap was disabled, re-enabling...")
-            if let tap = eventTap {
-                CGEvent.tapEnable(tap: tap, enable: true)
-            }
-            return Unmanaged.passRetained(event)
+    private func installEventHandler() {
+        var eventTypes: [EventTypeSpec] = [
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed)),
+            EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyReleased)),
+        ]
+
+        let status = InstallEventHandler(
+            GetApplicationEventTarget(),
+            Self.hotKeyEventHandler,
+            eventTypes.count,
+            &eventTypes,
+            Unmanaged.passUnretained(self).toOpaque(),
+            &eventHandlerRef
+        )
+
+        if status != noErr {
+            print("[HotkeyManager] ERROR: InstallEventHandler failed: \(status)")
         }
+    }
 
-        let keyCode = CGKeyCode(event.getIntegerValueField(.keyboardEventKeycode))
-        let flags = event.flags
+    private func registerHotKey() {
+        let status = RegisterEventHotKey(
+            registeredKeyCode,
+            registeredModifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
 
-        // Extract only the modifier flags we care about
-        let currentModifiers = flags.intersection(modifierMask)
-        let modifiersMatch = currentModifiers == registeredModifiers
-        let keyMatches = keyCode == registeredKeyCode
+        if status != noErr {
+            print("[HotkeyManager] ERROR: RegisterEventHotKey failed: \(status)")
+        } else {
+            print("[HotkeyManager] Hotkey registered - ready!")
+        }
+    }
 
+    private func handleHotKeyEvent(kind: UInt32) {
         switch hotkeyMode {
         case .hold:
-            return handleHoldMode(type: type, modifiersMatch: modifiersMatch, keyMatches: keyMatches, flags: flags, event: event)
-        case .toggle:
-            return handleToggleMode(type: type, modifiersMatch: modifiersMatch, keyMatches: keyMatches, event: event)
-        }
-    }
-
-    private func handleHoldMode(type: CGEventType, modifiersMatch: Bool, keyMatches: Bool, flags: CGEventFlags, event: CGEvent) -> Unmanaged<CGEvent>? {
-        // Key down
-        if type == .keyDown && modifiersMatch && keyMatches {
-            if !isKeyDown {
-                isKeyDown = true
+            if kind == UInt32(kEventHotKeyPressed) {
                 print("[HotkeyManager] Hotkey DOWN detected!")
                 DispatchQueue.main.async { [weak self] in
                     self?.onKeyDown?()
                 }
-            }
-            // Consume the event so it doesn't reach other apps
-            return nil
-        }
-
-        // Key up
-        if type == .keyUp && keyMatches && isKeyDown {
-            isKeyDown = false
-            print("[HotkeyManager] Hotkey UP detected!")
-            DispatchQueue.main.async { [weak self] in
-                self?.onKeyUp?()
-            }
-            // Consume the event
-            return nil
-        }
-
-        // Detect modifier release while key might still be conceptually "held"
-        if type == .flagsChanged && isKeyDown {
-            let currentMods = flags.intersection(modifierMask)
-            if currentMods != registeredModifiers {
-                isKeyDown = false
-                print("[HotkeyManager] Modifiers released, triggering UP")
+            } else if kind == UInt32(kEventHotKeyReleased) {
+                print("[HotkeyManager] Hotkey UP detected!")
                 DispatchQueue.main.async { [weak self] in
                     self?.onKeyUp?()
                 }
             }
-        }
-
-        // Pass through all other events
-        return Unmanaged.passRetained(event)
-    }
-
-    private func handleToggleMode(type: CGEventType, modifiersMatch: Bool, keyMatches: Bool, event: CGEvent) -> Unmanaged<CGEvent>? {
-        // Only respond to keyDown for toggle mode
-        if type == .keyDown && modifiersMatch && keyMatches {
-            if !isToggleActive {
-                // First press: start recording
-                isToggleActive = true
-                print("[HotkeyManager] Toggle ON - starting recording")
-                DispatchQueue.main.async { [weak self] in
-                    self?.onKeyDown?()
-                    self?.startToggleTimeout()
+        case .toggle:
+            if kind == UInt32(kEventHotKeyPressed) {
+                if !isToggleActive {
+                    isToggleActive = true
+                    print("[HotkeyManager] Toggle ON - starting recording")
+                    DispatchQueue.main.async { [weak self] in
+                        self?.onKeyDown?()
+                        self?.startToggleTimeout()
+                    }
+                } else {
+                    stopToggle()
                 }
-            } else {
-                // Second press: stop recording
-                stopToggle()
             }
-            // Consume the event
-            return nil
         }
-
-        // Pass through all other events
-        return Unmanaged.passRetained(event)
     }
 
     private func startToggleTimeout() {
@@ -227,6 +164,15 @@ class HotkeyManager {
         DispatchQueue.main.async { [weak self] in
             self?.onKeyUp?()
         }
+    }
+
+    private static let hotKeyEventHandler: EventHandlerUPP = { _, event, userData in
+        guard let event, let userData else { return noErr }
+        let manager = Unmanaged<HotkeyManager>.fromOpaque(userData).takeUnretainedValue()
+
+        let kind = GetEventKind(event)
+        manager.handleHotKeyEvent(kind: kind)
+        return noErr
     }
 
     private func keyCodeForString(_ key: String) -> UInt16 {

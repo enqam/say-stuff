@@ -99,43 +99,81 @@ struct HeaderView: View {
     @Binding var activeTab: MenuTab
     @Binding var showSettings: Bool
     @State private var showMicPicker = false
+    @State private var isCopied = false
     @ObservedObject private var audioDeviceManager = AudioDeviceManager.shared
     @ObservedObject private var settingsManager = SettingsManager.shared
+    @ObservedObject private var transcriptionStore = TranscriptionStore.shared
 
     var body: some View {
         VStack(spacing: 14) {
-            // Top row: mic button, centered logo, settings button
+            // Top row: mic button, centered logo, copy + settings buttons
             HStack {
-                // Mic input button (left)
-                Menu {
-                    Button("System Default") {
-                        settingsManager.settings.selectedAudioDeviceUID = nil
-                    }
-                    Divider()
-                    ForEach(audioDeviceManager.inputDevices) { device in
-                        Button(action: {
-                            settingsManager.settings.selectedAudioDeviceUID = device.uid
-                        }) {
-                            HStack {
-                                Text(device.name)
-                                if settingsManager.settings.selectedAudioDeviceUID == device.uid {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                    }
-                } label: {
+                // Mic input button (left) — Button+popover to fix icon visibility
+                Button(action: { showMicPicker.toggle() }) {
                     Image(systemName: "mic.fill")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(DS.textSecondary)
+                        .foregroundColor(showMicPicker ? DS.accent : DS.textSecondary)
                         .frame(width: 32, height: 32)
                         .background(
                             RoundedRectangle(cornerRadius: 8)
-                                .fill(DS.bgHover)
+                                .fill(showMicPicker ? DS.accent.opacity(0.2) : DS.bgHover)
                         )
                 }
-                .menuStyle(.borderlessButton)
+                .buttonStyle(.plain)
                 .frame(width: 32)
+                .popover(isPresented: $showMicPicker, arrowEdge: .bottom) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Button(action: {
+                            settingsManager.settings.selectedAudioDeviceUID = nil
+                            showMicPicker = false
+                        }) {
+                            HStack {
+                                Text("System Default")
+                                    .font(.system(size: 13, design: .rounded))
+                                Spacer()
+                                if settingsManager.settings.selectedAudioDeviceUID == nil {
+                                    Image(systemName: "checkmark")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundColor(DS.accent)
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+
+                        Rectangle()
+                            .fill(DS.border)
+                            .frame(height: 1)
+                            .padding(.horizontal, 8)
+
+                        ForEach(audioDeviceManager.inputDevices) { device in
+                            Button(action: {
+                                settingsManager.settings.selectedAudioDeviceUID = device.uid
+                                showMicPicker = false
+                            }) {
+                                HStack {
+                                    Text(device.name)
+                                        .font(.system(size: 13, design: .rounded))
+                                    Spacer()
+                                    if settingsManager.settings.selectedAudioDeviceUID == device.uid {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundColor(DS.accent)
+                                    }
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .frame(minWidth: 200)
+                    .background(DS.bgElevated)
+                }
 
                 Spacer()
 
@@ -187,6 +225,21 @@ struct HeaderView: View {
 
                 Spacer()
 
+                // Copy last transcription button
+                Button(action: copyLastTranscription) {
+                    Image(systemName: isCopied ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(isCopied ? DS.success : (transcriptionStore.transcriptions.isEmpty ? DS.textMuted : DS.textSecondary))
+                        .frame(width: 32, height: 32)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(isCopied ? DS.success.opacity(0.2) : DS.bgHover)
+                        )
+                }
+                .buttonStyle(.plain)
+                .frame(width: 32)
+                .disabled(transcriptionStore.transcriptions.isEmpty)
+
                 // Settings button (right)
                 Button(action: { showSettings.toggle() }) {
                     Image(systemName: "gearshape.fill")
@@ -226,6 +279,16 @@ struct HeaderView: View {
         switch tab {
         case .main: return "house.fill"
         case .history: return "clock.fill"
+        }
+    }
+
+    private func copyLastTranscription() {
+        guard let text = transcriptionStore.transcriptions.first?.text else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        isCopied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            isCopied = false
         }
     }
 }
@@ -281,6 +344,11 @@ struct MainTabContent: View {
 
 struct LanguageSelectorView: View {
     @ObservedObject var appDelegate: AppDelegate
+    @ObservedObject private var settingsManager = SettingsManager.shared
+
+    private var visibleLanguages: [SupportedLanguage] {
+        allSupportedLanguages.filter { settingsManager.settings.menuLanguages.contains($0.code) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -290,13 +358,19 @@ struct LanguageSelectorView: View {
                 .tracking(1)
 
             HStack(spacing: 8) {
-                ForEach(appDelegate.availableLanguages, id: \.0) { lang in
+                ForEach(visibleLanguages) { lang in
                     LanguageButton(
-                        code: lang.1,
-                        isSelected: appDelegate.selectedLanguage == lang.0,
-                        action: { appDelegate.selectLanguage(lang.0) }
+                        code: lang.shortLabel,
+                        isSelected: appDelegate.selectedLanguage == lang.code,
+                        action: { appDelegate.selectLanguage(lang.code) }
                     )
                 }
+            }
+        }
+        .onChange(of: settingsManager.settings.menuLanguages) { newLanguages in
+            if !newLanguages.contains(appDelegate.selectedLanguage),
+               let first = newLanguages.first {
+                appDelegate.selectLanguage(first)
             }
         }
     }
@@ -945,6 +1019,36 @@ struct GeneralSettingsContent: View {
                     isOn: $settingsManager.settings.showLogoInMenu
                 )
             }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("QUICK-SWITCH LANGUAGES")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundColor(DS.textMuted)
+                    .tracking(1)
+
+                VStack(spacing: 4) {
+                    ForEach(allSupportedLanguages) { lang in
+                        LanguageToggleRow(
+                            language: lang,
+                            isOn: Binding(
+                                get: { settingsManager.settings.menuLanguages.contains(lang.code) },
+                                set: { enabled in
+                                    if enabled {
+                                        if !settingsManager.settings.menuLanguages.contains(lang.code) {
+                                            settingsManager.settings.menuLanguages.append(lang.code)
+                                        }
+                                    } else {
+                                        // Prevent removing the last language
+                                        guard settingsManager.settings.menuLanguages.count > 1 else { return }
+                                        settingsManager.settings.menuLanguages.removeAll { $0 == lang.code }
+                                    }
+                                }
+                            ),
+                            isLastEnabled: settingsManager.settings.menuLanguages == [lang.code]
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -970,6 +1074,46 @@ struct SettingsToggleRow: View {
             Toggle("", isOn: $isOn)
                 .toggleStyle(.switch)
                 .scaleEffect(0.8)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(DS.bgElevated)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(DS.borderSubtle, lineWidth: 1)
+        )
+    }
+}
+
+struct LanguageToggleRow: View {
+    let language: SupportedLanguage
+    @Binding var isOn: Bool
+    let isLastEnabled: Bool
+
+    var body: some View {
+        HStack {
+            Text(language.name)
+                .font(.system(size: 14, design: .rounded))
+                .foregroundColor(DS.textPrimary)
+
+            Text(language.shortLabel)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundColor(DS.textMuted)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(DS.bgHover)
+                )
+
+            Spacer()
+
+            Toggle("", isOn: $isOn)
+                .toggleStyle(.switch)
+                .scaleEffect(0.8)
+                .disabled(isLastEnabled)
         }
         .padding(14)
         .background(

@@ -16,7 +16,16 @@ class ModelDownloader: ObservableObject {
         progress = 0
         statusMessage = "Connecting..."
 
-        let modelDir = URL(fileURLWithPath: SettingsManager.shared.settings.modelDirectory)
+        let modelDir = SettingsManager.shared.expandedModelDirectory
+
+        do {
+            try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+        } catch {
+            isDownloading = false
+            self.error = "Couldn't create models folder: \(error.localizedDescription)"
+            return
+        }
+
         let destination = modelDir.appendingPathComponent(model.filename)
 
         // Check if already downloaded

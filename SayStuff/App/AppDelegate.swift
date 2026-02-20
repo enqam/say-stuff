@@ -9,6 +9,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var settingsWindow: NSWindow?
     private var profileEditorWindow: NSWindow?
     private var transcriptionsWindow: NSWindow?
+    private var onboardingWindow: NSWindow?
 
     // Services
     private var audioRecorder: AudioRecorder!
@@ -16,6 +17,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     private var pasteService: PasteService!
     private var hotkeyManager: HotkeyManager!
     private var screenBorderOverlay: ScreenBorderOverlay!
+    private var volumeAttenuator: VolumeAttenuator!
     private var updateManager: UpdateManager!
     private var transcriptionQueue: TranscriptionQueue!
 
@@ -26,13 +28,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var selectedLanguage: String = "en"
 
     private var transcriptionStore = TranscriptionStore.shared
-
-    // Available languages for quick-switch
-    let availableLanguages = [
-        ("en", "EN", "English"),
-        ("ru", "RU", "Русский"),
-        ("auto", "AUTO", "Auto-detect")
-    ]
 
     private var profileManager = ProfileManager.shared
     private var settingsManager = SettingsManager.shared
@@ -45,6 +40,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         pasteService = PasteService()
         hotkeyManager = HotkeyManager()
         screenBorderOverlay = ScreenBorderOverlay()
+        volumeAttenuator = VolumeAttenuator()
         updateManager = UpdateManager()
         transcriptionQueue = TranscriptionQueue(pasteService: pasteService)
 
@@ -100,6 +96,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         if let savedLang = UserDefaults.standard.string(forKey: "selectedLanguage") {
             selectedLanguage = savedLang
         }
+
+        showOnboardingIfNeeded()
 
         print("[SayStuff] Ready! Hold ⌥⌘V to record")
     }
@@ -228,6 +226,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             NSSound(named: "Funk")?.play()
         }
 
+        // Attenuate system audio
+        if settingsManager.settings.attenuateAudio {
+            volumeAttenuator.attenuate(to: settingsManager.settings.attenuationLevel)
+        }
+
         do {
             try audioRecorder.startRecording()
 
@@ -250,6 +253,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         // Hide red screen border
         screenBorderOverlay.hide()
+
+        // Restore system audio
+        volumeAttenuator.restore()
 
         guard let audioURL = audioRecorder.stopRecording() else {
             print("[SayStuff] No audio captured")
@@ -325,7 +331,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
         let settingsView = SettingsView()
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 450, height: 300),
+            contentRect: NSRect(x: 0, y: 0, width: 450, height: 380),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -337,6 +343,33 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
         settingsWindow = window
 
         settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func showOnboardingIfNeeded() {
+        guard !settingsManager.settings.hasCompletedOnboarding else { return }
+        guard onboardingWindow == nil else { return }
+
+        let view = OnboardingView(onComplete: { [weak self] in
+            guard let self = self else { return }
+            self.settingsManager.settings.hasCompletedOnboarding = true
+            self.onboardingWindow?.close()
+            self.onboardingWindow = nil
+        })
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 440),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Welcome to SayStuff"
+        window.contentView = NSHostingView(rootView: view)
+        window.center()
+        window.isReleasedWhenClosed = false
+        onboardingWindow = window
+
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 

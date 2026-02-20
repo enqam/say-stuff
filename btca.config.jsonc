@@ -51,6 +51,6 @@
       "specialNotes": "Large SwiftUI extensions library - may have Canvas usage patterns and performance optimizations"
     }
   ],
-  "model": "gpt-5.2",
+  "model": "gpt-5.3-codex",
   "provider": "openai"
 }

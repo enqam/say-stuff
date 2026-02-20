@@ -21,7 +21,7 @@ struct SettingsView: View {
                     Label("Model", systemImage: "cpu")
                 }
         }
-        .frame(width: 450, height: 300)
+        .frame(width: 450, height: 380)
     }
 }
 
@@ -48,6 +48,20 @@ struct GeneralSettingsView: View {
             Section("Feedback") {
                 Toggle("Show menu bar icon", isOn: $settingsManager.settings.showMenuBarIcon)
                 Toggle("Play sounds", isOn: $settingsManager.settings.playSounds)
+            }
+
+            Section("Audio Attenuation") {
+                Toggle("Lower volume during recording", isOn: $settingsManager.settings.attenuateAudio)
+
+                if settingsManager.settings.attenuateAudio {
+                    HStack {
+                        Text("Level:")
+                        Slider(value: $settingsManager.settings.attenuationLevel, in: 0...1, step: 0.05)
+                        Text("\(Int(settingsManager.settings.attenuationLevel * 100))%")
+                            .frame(width: 35, alignment: .trailing)
+                            .monospacedDigit()
+                    }
+                }
             }
         }
         .padding()

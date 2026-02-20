@@ -15,6 +15,16 @@ SayStuff is a macOS menu bar app for local voice-to-text. Hold a hotkey to recor
 3. On first launch, if macOS warns about an unidentified developer:
    - Right‑click SayStuff in `/Applications` → `Open` → `Open`.
 
+## Share With a Friend (Fastest)
+
+1. On your Mac, run `./scripts/release.sh <version>` (example: `./scripts/release.sh 0.5.1`).
+2. Send your friend `releases/SayStuff-<version>.dmg`.
+3. They open the DMG, drag SayStuff into `/Applications`, and launch it.
+
+Notes:
+- The release script will try to bundle `whisper-cli` into the app automatically (so your friend doesn't need to install whisper.cpp). If it can't find `whisper-cli`, it will print a warning and your friend will need to install it or you can re-run with `WHISPER_CLI_PATH=/path/to/whisper-cli`.
+- On first run, SayStuff can download the Whisper model in-app and will prompt for permissions.
+
 ## Install (Build from Source)
 
 1. Open `SayStuff.xcodeproj` in Xcode.
@@ -22,10 +32,9 @@ SayStuff is a macOS menu bar app for local voice-to-text. Hold a hotkey to recor
 
 ## Setup
 
-1. Open the SayStuff menu bar icon, then open Settings.
-2. In the Model tab, set the `whisper-cli` path and model directory.
-3. Download a model in-app, or place a `.bin` model file in the model directory.
-4. Grant permissions when prompted:
+1. Launch SayStuff. On first run, the onboarding will guide you through downloading a model and granting permissions.
+2. If needed, open Settings → Model and confirm the `whisper-cli` path and model directory.
+3. Grant permissions when prompted:
    - Microphone access (for recording)
    - Accessibility access (for global hotkey and paste)
 
