@@ -172,6 +172,7 @@ struct HeaderView: View {
                     }
                     .padding(.vertical, 4)
                     .frame(minWidth: 200)
+                    .foregroundColor(DS.textPrimary)
                     .background(DS.bgElevated)
                 }
 
@@ -1018,6 +1019,43 @@ struct GeneralSettingsContent: View {
                     title: "Show logo in menu",
                     isOn: $settingsManager.settings.showLogoInMenu
                 )
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("AUDIO ATTENUATION")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundColor(DS.textMuted)
+                    .tracking(1)
+
+                SettingsToggleRow(
+                    title: "Lower volume during recording",
+                    isOn: $settingsManager.settings.attenuateAudio
+                )
+
+                if settingsManager.settings.attenuateAudio {
+                    HStack {
+                        Text("Level")
+                            .font(.system(size: 13, design: .rounded))
+                            .foregroundColor(DS.textSecondary)
+
+                        Slider(value: $settingsManager.settings.attenuationLevel, in: 0...1, step: 0.05)
+                            .tint(DS.accent)
+
+                        Text("\(Int(settingsManager.settings.attenuationLevel * 100))%")
+                            .font(.system(size: 13, weight: .medium, design: .monospaced))
+                            .foregroundColor(DS.textMuted)
+                            .frame(width: 42, alignment: .trailing)
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(DS.bgElevated)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(DS.borderSubtle, lineWidth: 1)
+                    )
+                }
             }
 
             VStack(alignment: .leading, spacing: 8) {

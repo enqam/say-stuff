@@ -69,6 +69,10 @@ class VolumeAttenuator {
     }
 
     func restore() {
+        // Cancel any in-progress fade to prevent it from overwriting the restored volume
+        fadeTimer?.cancel()
+        fadeTimer = nil
+
         guard let volume = savedVolume else { return }
 
         if let deviceID = defaultOutputDevice() {

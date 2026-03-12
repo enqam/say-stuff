@@ -18,6 +18,9 @@ DMG_NAME="${APP_NAME}-${VERSION}.dmg"
 # Set SIGN=1 to keep Xcode signing settings.
 # Default disables signing so the script works out-of-the-box on any Mac with Xcode.
 SIGN="${SIGN:-0}"
+DEVELOPER_ID_APP="${DEVELOPER_ID_APP:-""}"
+NOTARIZE="${NOTARIZE:-0}"
+KEYCHAIN_PROFILE="${KEYCHAIN_PROFILE:-""}"
 
 # Set UNIVERSAL=0 to build for only the host architecture.
 # Default builds a universal app (arm64 + x86_64) so you can share one DMG to any Mac.
@@ -29,6 +32,18 @@ BUNDLE_WHISPER="${BUNDLE_WHISPER:-1}"
 WHISPER_CLI_PATH="${WHISPER_CLI_PATH:-""}"
 # Optionally point to a whisper.cpp checkout (used to build a universal whisper-cli when needed).
 WHISPER_CPP_DIR="${WHISPER_CPP_DIR:-""}"
+
+codesign_path() {
+    local path="$1"
+    shift
+
+    if [ ! -e "${path}" ]; then
+        return 0
+    fi
+
+    echo "Signing ${path}..."
+    codesign --force --sign "${DEVELOPER_ID_APP}" --timestamp "$@" "${path}"
+}
 
 echo "Building SayStuff v${VERSION}..."
 
@@ -135,6 +150,32 @@ if [ "${BUNDLE_WHISPER}" = "1" ]; then
     fi
 fi
 
+# Re-sign the final app bundle after any packaging-time mutations.
+# Without this, embedded components like Sparkle can end up with invalid signatures
+# and the app may fail to launch on another Mac.
+if [ "${SIGN}" != "1" ]; then
+    echo "Applying ad-hoc signature to final app bundle..."
+    xattr -cr "${APP_PATH}" || true
+    codesign --force --sign - --deep --verbose=2 "${APP_PATH}"
+    codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
+elif [ -n "${DEVELOPER_ID_APP}" ]; then
+    echo "Applying Developer ID signature to final app bundle..."
+    xattr -cr "${APP_PATH}" || true
+
+    codesign_path "${APP_PATH}/Contents/Resources/whisper-cli" --options runtime
+    codesign_path "${APP_PATH}/Contents/Frameworks/Sparkle.framework/Versions/B/Autoupdate" --options runtime
+    codesign_path "${APP_PATH}/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Downloader.xpc" --options runtime
+    codesign_path "${APP_PATH}/Contents/Frameworks/Sparkle.framework/Versions/B/XPCServices/Installer.xpc" --options runtime
+    codesign_path "${APP_PATH}/Contents/Frameworks/Sparkle.framework/Versions/B/Updater.app" --options runtime
+    codesign_path "${APP_PATH}/Contents/Frameworks/Sparkle.framework" --options runtime
+    codesign_path "${APP_PATH}" --options runtime --entitlements "${ROOT_DIR}/SayStuff/SayStuff.entitlements"
+
+    codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
+else
+    echo "⚠️  SIGN=1 was requested, but DEVELOPER_ID_APP is not set."
+    echo "     The build may still be blocked on another Mac without a manual override."
+fi
+
 # Create release directory
 mkdir -p "${RELEASES_DIR}"
 
@@ -148,6 +189,21 @@ echo "Creating ${ZIP_NAME}..."
 echo "Creating ${DMG_NAME}..."
 hdiutil create -volname "${APP_NAME}" -srcfolder "${BUILD_DIR}/Build/Products/Release/${APP_NAME}.app" \
     -ov -format UDZO "${RELEASES_DIR}/${DMG_NAME}"
+
+if [ "${NOTARIZE}" = "1" ]; then
+    if [ -z "${KEYCHAIN_PROFILE}" ]; then
+        echo "Error: NOTARIZE=1 requires KEYCHAIN_PROFILE=<notarytool-profile>"
+        exit 1
+    fi
+
+    echo "Submitting ${DMG_NAME} for notarization..."
+    xcrun notarytool submit "${RELEASES_DIR}/${DMG_NAME}" \
+        --keychain-profile "${KEYCHAIN_PROFILE}" \
+        --wait
+
+    echo "Stapling notarization ticket..."
+    xcrun stapler staple "${RELEASES_DIR}/${DMG_NAME}"
+fi
 
 echo ""
 echo "✅ Release built:"
