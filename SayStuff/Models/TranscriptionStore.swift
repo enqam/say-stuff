@@ -4,11 +4,16 @@ struct RecentTranscription: Codable, Identifiable {
     let id: UUID
     let text: String
     let date: Date
+    /// What transcribed it ("Local", "Groq", "fal.ai") and how long from stop to paste.
+    var source: String?
+    var seconds: Double?
 
-    init(text: String) {
+    init(text: String, source: String? = nil, seconds: Double? = nil) {
         self.id = UUID()
         self.text = text
         self.date = Date()
+        self.source = source
+        self.seconds = seconds
     }
 }
 
@@ -25,8 +30,8 @@ final class TranscriptionStore: ObservableObject {
         load()
     }
 
-    func add(_ text: String) {
-        transcriptions.insert(RecentTranscription(text: text), at: 0)
+    func add(_ text: String, source: String? = nil, seconds: Double? = nil) {
+        transcriptions.insert(RecentTranscription(text: text, source: source, seconds: seconds), at: 0)
         if transcriptions.count > maxCount {
             transcriptions.removeLast(transcriptions.count - maxCount)
         }

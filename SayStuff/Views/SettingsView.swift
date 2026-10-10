@@ -219,7 +219,7 @@ struct SpeechPane: View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(spacing: 10) {
                 engineCard(.local, symbol: "laptopcomputer", title: "On this Mac", detail: "Private, offline, free")
-                engineCard(.cloud, symbol: "bolt.fill", title: "Cloud", detail: "fal Wizper v3 · fastest")
+                engineCard(.cloud, symbol: "bolt.fill", title: "Cloud", detail: "Whisper on Groq or fal.ai")
             }
 
             if settingsManager.settings.engine == .local {
@@ -255,14 +255,20 @@ struct SpeechPane: View {
                     }
                 }
             } else {
+                let provider = settingsManager.settings.cloudProvider
+                let hasKey = keys.hasKey(provider.keyProvider)
                 Card {
-                    CardRow(title: "fal.ai Wizper v3",
-                            detail: keys.hasKey(.fal)
+                    CardRow(title: "Provider") {
+                        ChipPicker(options: [(CloudProvider.groq, "Groq · fastest"), (.fal, "fal.ai")],
+                                   selection: $settingsManager.settings.cloudProvider)
+                    }
+                    CardRow(title: provider == .groq ? "whisper-large-v3-turbo" : "Wizper v3",
+                            detail: hasKey
                                 ? "Falls back to your local model if the cloud can't be reached."
-                                : "Add your fal.ai key to transcribe in the cloud.",
+                                : "Add your \(provider.keyProvider.displayName) key to transcribe in the cloud.",
                             showsDivider: false) {
-                        Button(keys.hasKey(.fal) ? "Manage key" : "Add key") { SettingsRouter.shared.pane = .cloud }
-                            .buttonStyle(PillButtonStyle(prominent: !keys.hasKey(.fal)))
+                        Button(hasKey ? "Manage key" : "Add key") { SettingsRouter.shared.pane = .cloud }
+                            .buttonStyle(PillButtonStyle(prominent: !hasKey))
                     }
                 }
             }
@@ -321,11 +327,11 @@ struct SpeechPane: View {
 struct CloudPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            SettingsSection(title: "fal.ai", footnote: "Cloud speech-to-text (Wizper v3). Used when the engine is set to Cloud.") {
-                Card { APIKeyRow(provider: .fal).padding(14) }
-            }
-            SettingsSection(title: "Groq", footnote: "Rewrites text for profiles with openai/gpt-oss-20b. Raw doesn't use it.") {
+            SettingsSection(title: "Groq", footnote: "Cloud speech-to-text (whisper-large-v3-turbo) and profile rewriting (openai/gpt-oss-20b).") {
                 Card { APIKeyRow(provider: .groq).padding(14) }
+            }
+            SettingsSection(title: "fal.ai", footnote: "Optional second cloud speech provider (Wizper v3). Slower: audio is uploaded before it's transcribed.") {
+                Card { APIKeyRow(provider: .fal).padding(14) }
             }
             SettingsSection(title: "Spend") { UsageCard() }
             Text("Keys are stored in your Keychain.")

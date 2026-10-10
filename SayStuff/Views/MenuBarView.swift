@@ -338,7 +338,7 @@ struct EngineSwitch: View {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
                 settingsManager.settings.engine = engine
             }
-            if engine == .cloud, !keys.hasKey(.fal) {
+            if engine == .cloud, !keys.hasKey(settingsManager.settings.cloudProvider.keyProvider) {
                 AppDelegate.shared.openSettings(.cloud)
             }
         } label: {

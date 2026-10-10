@@ -50,11 +50,17 @@ private struct HistoryRow: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
-                Text(item.date, format: .dateTime.hour().minute())
-                    .font(.mono(10.5))
-                    .foregroundStyle(Theme.textTertiary)
-                    .frame(width: 44, alignment: .leading)
-                    .padding(.top, 1)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.date, format: .dateTime.hour().minute())
+                    if let seconds = item.seconds {
+                        Text("\(item.source ?? "") \(String(format: "%.1fs", seconds))")
+                    }
+                }
+                .font(.mono(10.5))
+                .foregroundStyle(Theme.textTertiary)
+                .frame(width: 64, alignment: .leading)
+                .padding(.top, 1)
+                .help("Engine and time from stop to paste")
                 Text(item.text)
                     .font(.system(size: 12.5))
                     .foregroundStyle(Theme.text)
@@ -70,7 +76,7 @@ private struct HistoryRow: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
             if !isLast {
-                Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 70)
+                Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 90)
             }
         }
         .onHover { isHovering = $0 }

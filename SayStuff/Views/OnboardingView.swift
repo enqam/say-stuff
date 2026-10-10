@@ -23,7 +23,7 @@ struct OnboardingView: View {
         _ = downloader.completedCount
         switch settingsManager.settings.engine {
         case .local: return settingsManager.isModelDownloaded(settingsManager.settings.modelSize)
-        case .cloud: return keys.hasKey(.fal)
+        case .cloud: return keys.hasKey(.groq)
         }
     }
 
@@ -84,7 +84,7 @@ struct OnboardingView: View {
     private var engine: some View {
         VStack(alignment: .leading, spacing: 18) {
             title("How should it listen?", "You can switch any time from the menu bar.")
-            ChipPicker(options: [(TranscriptionEngine.local, "On this Mac"), (.cloud, "Cloud · fal.ai")],
+            ChipPicker(options: [(TranscriptionEngine.local, "On this Mac"), (.cloud, "Cloud · Groq")],
                        selection: $settingsManager.settings.engine)
             if settingsManager.settings.engine == .local {
                 Card {
@@ -93,7 +93,7 @@ struct OnboardingView: View {
                     }
                 }
             } else {
-                Card { APIKeyRow(provider: .fal).padding(14) }
+                Card { APIKeyRow(provider: .groq).padding(14) }
             }
         }
     }

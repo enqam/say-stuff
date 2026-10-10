@@ -27,7 +27,7 @@ struct UsageCard: View {
             .padding(14)
             Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 14)
 
-            breakdown(.transcription, title: "Transcription", provider: "fal Wizper v3") { seconds in
+            breakdown(.transcription, title: "Transcription", provider: "Groq / fal.ai Whisper") { seconds in
                 String(format: "%.1f min audio", seconds / 60)
             }
             breakdown(.formatting, title: "Formatting", provider: "Groq gpt-oss-20b", last: true) { tokens in

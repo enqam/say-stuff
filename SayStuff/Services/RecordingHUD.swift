@@ -18,7 +18,7 @@ final class RecordingHUD {
         static let dotSize: CGFloat = 7
         static let padding: CGFloat = 14
         static let dotGap: CGFloat = 10
-        static let gapAboveDock: CGFloat = 22
+        static let gapAboveDock: CGFloat = 48
         static let frameInterval: CFTimeInterval = 1.0 / 30
         static var barsWidth: CGFloat { CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barGap }
         static var pillWidth: CGFloat { padding * 2 + dotSize + dotGap + barsWidth }
@@ -64,7 +64,8 @@ final class RecordingHUD {
             // One glass view; the bars are plain layers inside it.
             let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: Metrics.pillWidth, height: Metrics.height))
             glass.cornerRadius = Metrics.height / 2
-            glass.tintColor = NSColor(white: 0, alpha: 0.45)
+            glass.style = .clear  // no frost: pure refraction, with a faint shade so white bars stay legible
+            glass.tintColor = NSColor(white: 0, alpha: 0.12)
             pill.frame = glass.bounds
             pill.autoresizingMask = [.width, .height]
             glass.contentView = pill
@@ -265,12 +266,10 @@ final class RecordingHUD {
         }
     }
 
-    /// Sits above the Dock even when the Dock auto-hides (its space isn't reserved then).
+    /// Just above a visible Dock; with an auto-hiding Dock, low near the screen edge.
     private static func baseline(on screen: NSScreen) -> CGFloat {
         let reserved = screen.visibleFrame.minY - screen.frame.minY
-        let tileSize = UserDefaults(suiteName: "com.apple.dock")?.double(forKey: "tilesize") ?? 0
-        let dockHeight = (tileSize > 0 ? tileSize : 48) + 20
-        return screen.frame.minY + max(reserved, dockHeight) + Metrics.gapAboveDock
+        return screen.frame.minY + (reserved > 8 ? reserved : 0) + Metrics.gapAboveDock
     }
 
     // MARK: - Animations (run on the render server)

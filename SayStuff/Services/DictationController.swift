@@ -124,6 +124,7 @@ final class DictationController: ObservableObject {
     func finish() {
         guard isRecording else { return }
         endRecordingUI()
+        let stoppedAt = Date()
         pendingJobs += 1
         phase = .processing
         hud.showProcessing()
@@ -137,7 +138,7 @@ final class DictationController: ObservableObject {
                 self.notify("No speech detected", symbol: "waveform.slash", duration: 1.4)
                 return
             }
-            self.transcribeAndPaste(recording)
+            self.transcribeAndPaste(recording, stoppedAt: stoppedAt)
         }
     }
 
@@ -153,11 +154,12 @@ final class DictationController: ObservableObject {
     /// Opens TLS connections while the user is still talking, so the requests start hot.
     private func warmUpConnections() {
         let keys = APIKeys.shared
-        if settings.engine == .cloud, keys.hasKey(.fal) {
+        if settings.engine == .cloud, settings.cloudProvider == .fal, keys.hasKey(.fal) {
             CloudSession.preconnect(URL(string: "https://rest.fal.ai/")!)
             CloudSession.preconnect(URL(string: "https://fal.run/")!)
         }
-        if settings.activeProfileID != nil, keys.hasKey(.groq) {
+        let usesGroq = settings.engine == .cloud && settings.cloudProvider == .groq
+        if usesGroq || settings.activeProfileID != nil, keys.hasKey(.groq) {
             CloudSession.preconnect(URL(string: "https://api.groq.com/")!)
         }
     }
@@ -167,6 +169,8 @@ final class DictationController: ObservableObject {
     private struct Job {
         let recording: Recording
         let engine: TranscriptionEngine
+        let cloudProvider: CloudProvider
+        let stoppedAt: Date
         let language: String
         let falKey: String?
         let groqKey: String?
@@ -181,13 +185,16 @@ final class DictationController: ObservableObject {
         let text: String
         let note: String?
         let usage: [UsageRecord]
+        let source: String
     }
 
-    private func transcribeAndPaste(_ recording: Recording) {
+    private func transcribeAndPaste(_ recording: Recording, stoppedAt: Date) {
         let keys = APIKeys.shared
         let job = Job(
             recording: recording,
             engine: settings.engine,
+            cloudProvider: settings.cloudProvider,
+            stoppedAt: stoppedAt,
             language: settings.language,
             falKey: keys.key(.fal),
             groqKey: keys.key(.groq),
@@ -225,7 +232,9 @@ final class DictationController: ObservableObject {
                                 duration: outcome.note == nil ? 1.4 : 2.6)
                     return
                 }
-                TranscriptionStore.shared.add(text.trimmingCharacters(in: .whitespaces))
+                let latency = Date().timeIntervalSince(job.stoppedAt)
+                print("[Dictation] \(outcome.source): \(String(format: "%.2f", latency))s from stop to paste")
+                TranscriptionStore.shared.add(text.trimmingCharacters(in: .whitespaces), source: outcome.source, seconds: latency)
                 if self.pasteService.paste(text) == .copiedOnly {
                     self.notify("Copied — press ⌘V to paste", symbol: "doc.on.clipboard", duration: 2.4)
                 } else if let note = outcome.note {
@@ -250,21 +259,33 @@ final class DictationController: ObservableObject {
             try await WhisperService().transcribe(job.local)
         }
 
-        switch (job.engine, job.falKey) {
-        case (.cloud, let key?):
+        var source = "Local"
+        if job.engine == .cloud {
+            let provider = job.cloudProvider
+            let key = provider == .groq ? job.groqKey : job.falKey
             do {
-                let result = try await FalTranscriber().transcribe(audioURL: job.recording.url, language: job.language, key: key)
+                guard let key else { throw CloudError.missingKey(provider.keyProvider) }
+                switch provider {
+                case .groq:
+                    let result = try await GroqTranscriber().transcribe(
+                        audioURL: job.recording.url, language: job.language, prompt: job.vocabulary, key: key)
+                    text = WhisperService.clean(result.text)
+                    usage.append(UsageRecord(service: .transcription, provider: "Groq whisper-large-v3-turbo",
+                                             quantity: job.recording.duration,
+                                             costUSD: GroqTranscriber.cost(audioSeconds: job.recording.duration)))
+                    source = "Groq"
+                case .fal:
+                    let result = try await FalTranscriber().transcribe(audioURL: job.recording.url, language: job.language, key: key)
+                    text = WhisperService.clean(result.text)
+                    let (cost, isEstimate) = await FalPricing.shared.cost(
+                        audioSeconds: job.recording.duration, requestSeconds: result.requestSeconds, key: key)
+                    usage.append(UsageRecord(service: .transcription, provider: "fal.ai Wizper v3",
+                                             quantity: job.recording.duration, costUSD: cost, isEstimate: isEstimate))
+                    source = "fal.ai"
+                }
                 try? FileManager.default.removeItem(at: job.recording.url)
-                text = WhisperService.clean(result.text)
-                let (cost, isEstimate) = await FalPricing.shared.cost(
-                    audioSeconds: job.recording.duration,
-                    requestSeconds: result.requestSeconds,
-                    key: key
-                )
-                usage.append(UsageRecord(service: .transcription, provider: "fal.ai Wizper v3",
-                                         quantity: job.recording.duration, costUSD: cost, isEstimate: isEstimate))
             } catch {
-                if let failure = error as? FalBilledFailure {
+                if let failure = error as? FalBilledFailure, let key {
                     let (cost, isEstimate) = await FalPricing.shared.cost(
                         audioSeconds: job.recording.duration, requestSeconds: failure.requestSeconds, key: key)
                     usage.append(UsageRecord(service: .transcription, provider: "fal.ai Wizper v3 (failed)",
@@ -272,17 +293,17 @@ final class DictationController: ObservableObject {
                 }
                 guard job.localAvailable else {
                     // Keep the spend record even though there's nothing to paste.
-                    return Outcome(text: "", note: error.localizedDescription, usage: usage)
+                    return Outcome(text: "", note: error.localizedDescription, usage: usage, source: provider.displayName)
                 }
                 print("[Dictation] Cloud transcription failed, using local: \(error)")
-                notes.append("Cloud unavailable — transcribed on this Mac")
+                if case CloudError.missingKey = error {
+                    notes.append("Add a \(provider.keyProvider.displayName) key to use Cloud")
+                } else {
+                    notes.append("Cloud unavailable — transcribed on this Mac")
+                }
                 text = try await transcribeLocally()
             }
-        case (.cloud, nil):
-            guard job.localAvailable else { throw CloudError.missingKey(.fal) }
-            notes.append("Add a fal.ai key to use Cloud")
-            text = try await transcribeLocally()
-        case (.local, _):
+        } else {
             text = try await transcribeLocally()
         }
 
@@ -305,7 +326,7 @@ final class DictationController: ObservableObject {
             }
         }
 
-        return Outcome(text: text, note: notes.first, usage: usage)
+        return Outcome(text: text, note: notes.first, usage: usage, source: source)
     }
 
     private func finalize(_ text: String) -> String {

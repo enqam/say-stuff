@@ -148,6 +148,50 @@ enum CloudSession {
     }
 }
 
+// MARK: - Groq Whisper (transcription)
+
+/// One multipart request with the audio attached; no upload step, so it's the fastest cloud path.
+struct GroqTranscriber {
+    static let model = "whisper-large-v3-turbo"
+    static let endpoint = URL(string: "https://api.groq.com/openai/v1/audio/transcriptions")!
+    // $0.04 per audio hour, minimum 10 seconds billed per request (checked 2026-10-10).
+    static let pricePerSecond = Decimal(string: "0.04")! / 3600
+    static let minimumBilledSeconds = 10.0
+
+    struct Result { let text: String }
+
+    static func cost(audioSeconds: Double) -> Decimal {
+        pricePerSecond * Decimal(max(audioSeconds, minimumBilledSeconds))
+    }
+
+    func transcribe(audioURL: URL, language: String, prompt: String?, key: String) async throws -> Result {
+        let boundary = "saystuff-\(UUID().uuidString)"
+        var body = Data()
+        func field(_ name: String, _ value: String) {
+            body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".data(using: .utf8)!)
+        }
+        field("model", Self.model)
+        field("response_format", "json")
+        field("temperature", "0")
+        if language != "auto" { field("language", language) }  // omitted = auto-detect
+        if let prompt, !prompt.isEmpty { field("prompt", String(prompt.prefix(600))) }
+        body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
+        body.append(try Data(contentsOf: audioURL))
+        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+
+        var request = URLRequest(url: Self.endpoint)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        let (data, response) = try await CloudSession.shared.upload(for: request, from: body)
+        try CloudSession.check(response, data: data, provider: .groq)
+
+        struct Output: Decodable { let text: String }
+        return Result(text: try JSONDecoder().decode(Output.self, from: data).text)
+    }
+}
+
 // MARK: - fal.ai Wizper (transcription)
 
 struct FalTranscriber {

@@ -50,9 +50,29 @@ enum TranscriptionEngine: String, Codable, CaseIterable {
     }
 }
 
+enum CloudProvider: String, Codable, CaseIterable {
+    case groq
+    case fal
+
+    var displayName: String {
+        switch self {
+        case .groq: return "Groq Whisper"
+        case .fal: return "fal.ai Wizper"
+        }
+    }
+
+    var keyProvider: APIKeys.Provider {
+        switch self {
+        case .groq: return .groq
+        case .fal: return .fal
+        }
+    }
+}
+
 struct AppSettings: Codable, Equatable {
     // Transcription
     var engine: TranscriptionEngine = .local
+    var cloudProvider: CloudProvider = .groq
     var modelSize: WhisperModel = .small
     var whisperPath: String = "/usr/local/bin/whisper-cli"
     var modelDirectory: String = "~/Library/Application Support/SayStuff/models"
@@ -95,6 +115,7 @@ struct AppSettings: Codable, Equatable {
             (try? c.decodeIfPresent(T.self, forKey: key)) ?? fallback
         }
         engine = value(.engine, d.engine)
+        cloudProvider = value(.cloudProvider, d.cloudProvider)
         modelSize = value(.modelSize, d.modelSize)
         whisperPath = value(.whisperPath, d.whisperPath)
         modelDirectory = value(.modelDirectory, d.modelDirectory)
