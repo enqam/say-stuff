@@ -111,7 +111,8 @@ struct MenuBarView: View {
             case .recording(let since):
                 TimelineView(.periodic(from: since, by: 1)) { context in
                     let seconds = max(0, Int(context.date.timeIntervalSince(since)))
-                    Text("Listening · \(seconds / 60):\(String(format: "%02d", seconds % 60))")
+                    let language = dictation.recordingLanguage.map { " · \($0.uppercased())" } ?? ""
+                    Text("Listening\(language) · \(seconds / 60):\(String(format: "%02d", seconds % 60))")
                         .foregroundStyle(Theme.accent)
                 }
             case .processing:

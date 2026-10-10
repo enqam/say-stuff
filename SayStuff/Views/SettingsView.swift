@@ -212,6 +212,7 @@ struct GeneralPane: View {
 
 struct SpeechPane: View {
     @ObservedObject private var settingsManager = SettingsManager.shared
+    @ObservedObject private var dictation = DictationController.shared
     @ObservedObject private var keys = APIKeys.shared
     @State private var showsFiles = false
 
@@ -287,6 +288,23 @@ struct SpeechPane: View {
                             // Keep at least one.
                             guard !isOn || settingsManager.settings.spokenLanguages.count > 1 else { return }
                             settingsManager.settings.toggleSpokenLanguage(language.code)
+                        }
+                    }
+                }
+            }
+
+            SettingsSection(title: "Language shortcuts",
+                            footnote: "Dictates straight into that language and skips detection (about 0.1 s faster on Small, 0.5 s on Turbo). Your main shortcut keeps using Auto.") {
+                Card {
+                    let spoken = settingsManager.settings.spokenLanguages
+                    ForEach(spoken, id: \.self) { code in
+                        CardRow(title: allSupportedLanguages.first { $0.code == code }?.name ?? code.uppercased(),
+                                detail: dictation.languageHotkeyErrors[code],
+                                showsDivider: code != spoken.last) {
+                            ShortcutRecorder(combo: Binding(
+                                get: { settingsManager.settings.languageHotkeys[code] },
+                                set: { settingsManager.settings.languageHotkeys[code] = $0 }
+                            ))
                         }
                     }
                 }

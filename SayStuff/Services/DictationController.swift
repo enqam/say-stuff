@@ -17,6 +17,10 @@ final class DictationController: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     /// Set when the dictation shortcut couldn't be registered (usually taken by another app).
     @Published private(set) var hotkeyError: String?
+    /// Per-language shortcut problems, keyed by language code.
+    @Published private(set) var languageHotkeyErrors: [String: String] = [:]
+    /// Set when the current recording was started with a language shortcut.
+    @Published private(set) var recordingLanguage: String?
 
     var isRecording: Bool {
         if case .recording = phase { return true }
@@ -61,6 +65,12 @@ final class DictationController: ObservableObject {
             .store(in: &cancellables)
 
         settingsManager.$settings
+            .map(Self.languageShortcuts)
+            .removeDuplicates()
+            .sink { [weak self] shortcuts in self?.registerLanguageHotkeys(shortcuts) }
+            .store(in: &cancellables)
+
+        settingsManager.$settings
             .map { [$0.engine.rawValue, $0.modelSize.rawValue, $0.whisperPath, $0.modelDirectory, "\($0.modelIdleMinutes)"] }
             .removeDuplicates()
             .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
@@ -101,24 +111,63 @@ final class DictationController: ObservableObject {
         hotkeyError = ok ? nil : "\(combo.displayString) is taken by another app. Pick a different shortcut."
     }
 
+    private var languageHotkeyIDs: [HotkeyManager.ID: String] = [:]
+
+    private struct LanguageShortcut: Equatable {
+        let code: String
+        let combo: KeyCombo
+    }
+
+    private static func languageShortcuts(_ settings: AppSettings) -> [LanguageShortcut] {
+        settings.spokenLanguages.compactMap { code in
+            settings.languageHotkeys[code].map { LanguageShortcut(code: code, combo: $0) }
+        }
+    }
+
+    private func registerLanguageHotkeys(_ shortcuts: [LanguageShortcut]) {
+        languageHotkeyIDs.keys.forEach(hotkeys.unregister)
+        languageHotkeyIDs = [:]
+        var errors: [String: String] = [:]
+        var taken = [settings.hotkey]
+        for (index, shortcut) in shortcuts.enumerated() {
+            let code = shortcut.code, combo = shortcut.combo
+            if taken.contains(where: { $0.sameKeys(as: combo) }) {
+                errors[code] = "\(combo.displayString) is already used by another SayStuff shortcut."
+                continue
+            }
+            let id = HotkeyManager.ID.language(index)
+            if hotkeys.register(id, keyCode: combo.keyCode, modifiers: combo.carbonModifiers) {
+                languageHotkeyIDs[id] = code
+                taken.append(combo)
+            } else {
+                errors[code] = "\(combo.displayString) is taken by another app."
+            }
+        }
+        languageHotkeyErrors = errors
+    }
+
     private func handleHotkey(_ id: HotkeyManager.ID, isPress: Bool) {
         guard !hotkeysSuspended else { return }
-        switch (id, isPress) {
-        case (.dictation, true):
+        let language = languageHotkeyIDs[id]
+        guard id == .dictation || language != nil else { return }
+        if isPress {
+            // Any SayStuff shortcut stops a toggle recording, whichever one started it.
             if settings.hotkeyMode == .toggle, isRecording {
                 finish()
             } else {
-                begin()
+                begin(language: language)
             }
-        case (.dictation, false):
-            if settings.hotkeyMode == .hold { finish() }
+        } else if settings.hotkeyMode == .hold {
+            finish()
         }
     }
 
     // MARK: - Recording
 
-    func begin() {
+    /// `language` forces one language for this recording (a language shortcut); nil uses the settings.
+    func begin(language: String? = nil) {
         guard !isRecording else { return }
+        recordingLanguage = language
         phase = .recording(since: Date())
 
         hud.showRecording()
@@ -151,6 +200,7 @@ final class DictationController: ObservableObject {
 
     func finish() {
         guard isRecording else { return }
+        let forcedLanguage = recordingLanguage
         endRecordingUI()
         let stoppedAt = Date()
         pendingJobs += 1
@@ -166,12 +216,13 @@ final class DictationController: ObservableObject {
                 self.notify("No speech detected", symbol: "waveform.slash", duration: 1.4)
                 return
             }
-            self.transcribeAndPaste(recording, stoppedAt: stoppedAt)
+            self.transcribeAndPaste(recording, stoppedAt: stoppedAt, forcedLanguage: forcedLanguage)
         }
     }
 
     private func endRecordingUI() {
         phase = .idle
+        recordingLanguage = nil
         autoStopTimer?.invalidate()
         autoStopTimer = nil
         border.hide()
@@ -219,15 +270,16 @@ final class DictationController: ObservableObject {
         var metric: DictationMetric
     }
 
-    private func transcribeAndPaste(_ recording: Recording, stoppedAt: Date) {
+    private func transcribeAndPaste(_ recording: Recording, stoppedAt: Date, forcedLanguage: String?) {
         let keys = APIKeys.shared
+        let candidates = forcedLanguage.map { [$0] } ?? settings.candidateLanguages
         let job = Job(
             recording: recording,
             engine: settings.engine,
             cloudProvider: settings.cloudProvider,
             stoppedAt: stoppedAt,
             language: settings.language,
-            candidates: settings.candidateLanguages,
+            candidates: candidates,
             falKey: keys.key(.fal),
             groqKey: keys.key(.groq),
             profile: ProfileStore.shared.profile(id: settings.activeProfileID),
@@ -237,7 +289,7 @@ final class DictationController: ObservableObject {
                 audioURL: recording.url,
                 whisperPath: settingsManager.whisperBinaryPath,
                 modelPath: settingsManager.modelPath,
-                candidates: settings.candidateLanguages,
+                candidates: candidates,
                 vocabulary: DictionaryStore.shared.vocabularyPrompt
             ),
             localModel: settings.modelSize,

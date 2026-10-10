@@ -2,11 +2,16 @@ import Carbon.HIToolbox
 import AppKit
 
 /// A global shortcut: modifier names ("cmd", "shift", "option", "control") plus a raw key code.
-struct KeyCombo: Equatable {
+struct KeyCombo: Codable, Equatable {
     var modifiers: [String]
     var keyCode: UInt16
     /// Character captured when the shortcut was recorded; used for keys we have no name for.
     var fallbackKey: String = ""
+
+    /// Same physical shortcut (ignores the cached display character).
+    func sameKeys(as other: KeyCombo) -> Bool {
+        keyCode == other.keyCode && Set(modifiers) == Set(other.modifiers)
+    }
 
     var isHyper: Bool {
         Set(modifiers) == ["cmd", "shift", "option", "control"]

@@ -4,8 +4,10 @@ import Carbon.HIToolbox
 /// Thin wrapper over Carbon global hotkeys. Reports raw press/release per hotkey id;
 /// what a press *means* (hold vs. toggle) is decided by the caller.
 final class HotkeyManager {
-    enum ID: UInt32 {
-        case dictation = 1
+    struct ID: Hashable {
+        let rawValue: UInt32
+        static let dictation = ID(rawValue: 1)
+        static func language(_ index: Int) -> ID { ID(rawValue: 100 + UInt32(index)) }
     }
 
     var onEvent: ((ID, _ isPress: Bool) -> Void)?
@@ -78,9 +80,10 @@ final class HotkeyManager {
             nil,
             &hotKeyID
         )
-        guard status == noErr, hotKeyID.signature == signature, let id = ID(rawValue: hotKeyID.id) else {
+        guard status == noErr, hotKeyID.signature == signature else {
             return OSStatus(eventNotHandledErr)
         }
+        let id = ID(rawValue: hotKeyID.id)
 
         let isPress = GetEventKind(event) == UInt32(kEventHotKeyPressed)
         manager.onEvent?(id, isPress)

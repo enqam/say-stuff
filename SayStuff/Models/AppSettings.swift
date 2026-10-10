@@ -104,8 +104,16 @@ struct AppSettings: Codable, Equatable {
 
     var hasCompletedOnboarding: Bool = false
 
+    /// Optional shortcuts that dictate straight into one language (language code → shortcut).
+    var languageHotkeys: [String: KeyCombo] = [:]
+
     var hotkey: KeyCombo {
-        KeyCombo(modifiers: hotkeyModifiers, keyCode: hotkeyKeyCode, fallbackKey: hotkeyKey)
+        get { KeyCombo(modifiers: hotkeyModifiers, keyCode: hotkeyKeyCode, fallbackKey: hotkeyKey) }
+        set {
+            hotkeyModifiers = newValue.modifiers
+            hotkeyKeyCode = newValue.keyCode
+            hotkeyKey = newValue.fallbackKey
+        }
     }
 
     init() {}
@@ -125,6 +133,7 @@ struct AppSettings: Codable, Equatable {
         modelDirectory = value(.modelDirectory, d.modelDirectory)
         language = value(.language, UserDefaults.standard.string(forKey: "selectedLanguage") ?? d.language)
         spokenLanguages = value(.spokenLanguages, d.spokenLanguages)
+        languageHotkeys = value(.languageHotkeys, d.languageHotkeys)
         addTrailingSpace = value(.addTrailingSpace, d.addTrailingSpace)
         activeProfileID = value(.activeProfileID, d.activeProfileID)
         learnCorrections = value(.learnCorrections, d.learnCorrections)

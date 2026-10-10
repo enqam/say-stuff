@@ -399,27 +399,57 @@ struct KeyCaps: View {
     }
 }
 
+/// Click, then press a shortcut. Records the main dictation shortcut by default, or any
+/// optional shortcut through `combo` (which can also be cleared).
 struct ShortcutRecorder: View {
+    private let combo: Binding<KeyCombo?>
+    private let allowsClear: Bool
     @ObservedObject private var settingsManager = SettingsManager.shared
     @State private var isRecording = false
     @State private var monitor: Any?
     @State private var rejected = false
 
+    /// The main dictation shortcut.
+    init() {
+        let manager = SettingsManager.shared
+        combo = Binding(get: { manager.settings.hotkey },
+                        set: { if let value = $0 { manager.settings.hotkey = value } })
+        allowsClear = false
+    }
+
+    init(combo: Binding<KeyCombo?>) {
+        self.combo = combo
+        allowsClear = true
+    }
+
     var body: some View {
-        Button(action: { isRecording ? stop() : start() }) {
-            if isRecording {
-                Text(rejected ? "Add ⌘ ⌥ ⌃ or ⇧" : "Type shortcut…")
-                    .font(.mono(11, weight: .semibold))
-                    .foregroundStyle(rejected ? Theme.warning : Theme.accent)
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: 22)
-                    .background(Capsule().fill(Theme.accentSoft))
-            } else {
-                KeyCaps(combo: settingsManager.settings.hotkey)
+        HStack(spacing: 4) {
+            Button(action: { isRecording ? stop() : start() }) {
+                if isRecording {
+                    Text(rejected ? "Add ⌘ ⌥ ⌃ or ⇧" : "Type shortcut…")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(rejected ? Theme.warning : Theme.accent)
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: 22)
+                        .background(Capsule().fill(Theme.accentSoft))
+                } else if let value = combo.wrappedValue {
+                    KeyCaps(combo: value)
+                } else {
+                    Text("Set shortcut")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(Theme.textSecondary)
+                        .padding(.horizontal, 10)
+                        .frame(minHeight: 22)
+                        .background(Capsule().fill(Theme.raised))
+                }
+            }
+            .buttonStyle(.plain)
+            .help(isRecording ? "Press Esc to cancel" : "Click to change")
+
+            if allowsClear, combo.wrappedValue != nil, !isRecording {
+                IconButton(symbol: "xmark", help: "Remove shortcut") { combo.wrappedValue = nil }
             }
         }
-        .buttonStyle(.plain)
-        .help(isRecording ? "Press Esc to cancel" : "Click to change")
         .onDisappear(perform: stop)
     }
 
@@ -439,9 +469,11 @@ struct ShortcutRecorder: View {
                 NSSound.beep()
                 return nil
             }
-            settingsManager.settings.hotkeyModifiers = modifiers
-            settingsManager.settings.hotkeyKeyCode = event.keyCode
-            settingsManager.settings.hotkeyKey = event.charactersIgnoringModifiers?.lowercased() ?? ""
+            combo.wrappedValue = KeyCombo(
+                modifiers: modifiers,
+                keyCode: event.keyCode,
+                fallbackKey: event.charactersIgnoringModifiers?.lowercased() ?? ""
+            )
             stop()
             return nil
         }
