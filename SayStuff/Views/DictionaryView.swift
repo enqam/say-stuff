@@ -2,84 +2,76 @@ import SwiftUI
 
 struct DictionaryPane: View {
     @ObservedObject private var store = DictionaryStore.shared
-    @ObservedObject private var settingsManager = SettingsManager.shared
     @State private var term = ""
     @State private var heardAs = ""
-    @FocusState private var termFocused: Bool
 
     var body: some View {
-        Form {
-            Section {
+        VStack(alignment: .leading, spacing: 22) {
+            SettingsSection(title: "Add a word",
+                            footnote: "Words are passed to the speech model as hints. Add what it usually mishears and SayStuff swaps it for you.") {
                 HStack(spacing: 8) {
-                    TextField("Word or name", text: $term, prompt: Text("Word or name, e.g. Kcaly"))
-                        .labelsHidden()
-                        .focused($termFocused)
-                    TextField("Heard as", text: $heardAs, prompt: Text("Often heard as (optional)"))
-                        .labelsHidden()
+                    ThemedField(placeholder: "Word or name — Kcaly", text: $term)
+                        .onSubmit(add)
+                    ThemedField(placeholder: "Heard as — Kaylee, Kayley", text: $heardAs)
+                        .onSubmit(add)
                     Button("Add", action: add)
+                        .buttonStyle(PillButtonStyle(prominent: true))
                         .disabled(term.trimmingCharacters(in: .whitespaces).isEmpty)
-                        .keyboardShortcut(.defaultAction)
                 }
-            } header: {
-                Text("Add a word")
-            } footer: {
-                Text("Words are passed to the speech model as hints. If you also add how it usually mishears a word, SayStuff fixes it automatically.")
-                    .foregroundStyle(.secondary)
             }
 
-            Section {
-                Toggle("Learn from my corrections", isOn: $settingsManager.settings.learnCorrections)
-                ComingNextNote(text: "When you fix a word right after it's pasted, SayStuff adds it here and shows a small notice. Connected in the next step.")
-            }
-
-            Section("Words") {
+            SettingsSection(title: "Words · \(store.entries.count)") {
                 if store.entries.isEmpty {
-                    Text("No words yet.")
-                        .foregroundStyle(.secondary)
+                    Text("Nothing yet.")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Theme.textTertiary)
                 } else {
-                    ForEach(store.entries) { entry in
-                        DictionaryRow(entry: entry) { store.remove(entry.id) }
+                    FlowLayout(spacing: 6) {
+                        ForEach(store.entries) { entry in
+                            WordChip(entry: entry) { store.remove(entry.id) }
+                        }
                     }
                 }
             }
         }
-        .formStyle(.grouped)
     }
 
     private func add() {
-        let variants = heardAs.split(separator: ",").map(String.init)
-        store.add(term: term, heardAs: variants)
+        store.add(term: term, heardAs: heardAs.split(separator: ",").map(String.init))
         term = ""
         heardAs = ""
-        termFocused = true
     }
 }
 
-private struct DictionaryRow: View {
+private struct WordChip: View {
     let entry: DictionaryEntry
     let onDelete: () -> Void
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Text(entry.term)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(Theme.text)
             if !entry.heardAs.isEmpty {
                 Text("← " + entry.heardAs.joined(separator: ", "))
-                    .foregroundStyle(.secondary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textTertiary)
                     .lineLimit(1)
             }
-            if entry.learned {
-                Badge("Learned")
-            }
-            Spacer()
             Button(action: onDelete) {
-                Image(systemName: "minus.circle")
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Theme.textSecondary)
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.secondary)
+            .buttonStyle(.plain)
             .opacity(isHovering ? 1 : 0)
+            .frame(width: isHovering ? nil : 0)
             .help("Remove")
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Capsule().fill(entry.learned ? Theme.accentSoft : (isHovering ? Theme.raised : Theme.surface)))
         .onHover { isHovering = $0 }
     }
 }

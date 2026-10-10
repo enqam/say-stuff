@@ -12,7 +12,8 @@ SayStuff is a macOS menu bar app for voice-to-text transcription. Press a hotkey
 
 ## Key Components
 
-- **DictationController**: Owns the record → transcribe → paste loop, hotkey handling (hold/toggle, Esc to cancel), sounds and volume ducking. Pastes stay in spoken order.
+- **DictationController**: Owns the record → transcribe (local or fal Wizper) → format (Groq) → paste loop, hotkey handling (hold/toggle), start/done sounds (Funk/Glass) and volume ducking. Pastes stay in spoken order; cloud failures fall back to local.
+- **CloudServices**: Keychain API keys, fal.ai Wizper client + live pricing, Groq `openai/gpt-oss-20b` formatter (temperature 0, few-shot per profile)
 - **RecordingHUD**: AppKit/Core Animation pill at the bottom of the screen (live waveform, transcribing shimmer, status messages)
 - **AudioRecorder**: Captures the mic off the main thread, meters levels, trims leading/trailing silence (prevents Whisper "Thank you." hallucinations)
 - **WhisperService**: Local speech-to-text using whisper.cpp's `whisper-cli`
@@ -21,7 +22,7 @@ SayStuff is a macOS menu bar app for voice-to-text transcription. Press a hotkey
 - **ProfileStore / DictionaryStore / UsageLedger**: Output profiles (Raw = none), custom vocabulary + mishearing fixes, API spend records
 - **ScreenBorderOverlay**: Optional red border around the screen during recording
 
-UI: `MenuBarView` (popover) and `SettingsView` (one window, sidebar panes). Debug builds can render every screen to PNGs: `SAYSTUFF_SNAPSHOT_DIR=/tmp/shots <app>/Contents/MacOS/SayStuff`.
+UI: `MenuBarView` in a custom `MenuPanel` (doesn't steal focus) and `SettingsView` (one window, top tabs). Design tokens live in `Views/Components.swift` (`Theme`). Debug builds can render every screen to PNGs: `SAYSTUFF_SNAPSHOT_DIR=/tmp/shots <app>/Contents/MacOS/SayStuff`.
 
 # btca
 

@@ -56,6 +56,47 @@ struct Profile: Codable, Identifiable, Hashable {
             isBuiltIn: false
         )
     }
+
+    struct Example {
+        let input: String
+        let output: String
+    }
+
+    /// Few-shot examples for the built-ins; they keep a small model consistent at temperature 0.
+    static func examples(for id: UUID) -> [Example] {
+        switch id {
+        case promptID:
+            return [
+                Example(
+                    input: "ok so first I need you to add a loading spinner to the upload button then make the error message red and also log the failure to sentry oh and actually don't use sentry use our own logger",
+                    output: """
+                    1. Add a loading spinner to the upload button.
+                    2. Make the error message red.
+                    3. Log the failure.
+
+                    Don't use Sentry; use our own logger instead.
+                    """
+                ),
+                Example(
+                    input: "can you um rename the user data variable to profile across the whole file",
+                    output: "Rename the userData variable to profile across the whole file."
+                ),
+            ]
+        case formalID:
+            return [
+                Example(
+                    input: "hey john um just wanted to check if you got the report i sent yesterday let me know if anything's missing thanks",
+                    output: "Hi John, I just wanted to check whether you received the report I sent yesterday. Let me know if anything is missing. Thanks."
+                ),
+                Example(
+                    input: "so the meeting got moved to thursday at three because uh half the team is out on wednesday",
+                    output: "The meeting has been moved to Thursday at 3:00 because half the team is out on Wednesday."
+                ),
+            ]
+        default:
+            return []
+        }
+    }
 }
 
 /// A fixed spoken sample used to preview what each profile produces.

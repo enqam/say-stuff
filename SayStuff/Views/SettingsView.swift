@@ -2,7 +2,7 @@ import SwiftUI
 import ServiceManagement
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, transcription, profiles, dictionary, history, usage, about
+    case general, transcription, profiles, dictionary, history
 
     var id: String { rawValue }
 
@@ -10,23 +10,9 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: return "General"
         case .transcription: return "Transcription"
-        case .profiles: return "Output"
+        case .profiles: return "Profiles"
         case .dictionary: return "Dictionary"
         case .history: return "History"
-        case .usage: return "Usage"
-        case .about: return "About"
-        }
-    }
-
-    var symbol: String {
-        switch self {
-        case .general: return "gearshape"
-        case .transcription: return "waveform"
-        case .profiles: return "text.badge.star"
-        case .dictionary: return "character.book.closed"
-        case .history: return "clock"
-        case .usage: return "dollarsign.circle"
-        case .about: return "info.circle"
         }
     }
 }
@@ -40,40 +26,72 @@ struct SettingsView: View {
     @ObservedObject private var router = SettingsRouter.shared
 
     var body: some View {
-        NavigationSplitView {
-            List(SettingsPane.allCases, selection: Binding(
-                get: { router.pane },
-                set: { if let pane = $0 { router.pane = pane } }
-            )) { pane in
-                Label(pane.title, systemImage: pane.symbol)
-                    .tag(pane)
-            }
-            .navigationSplitViewColumnWidth(min: 170, ideal: 180, max: 220)
-        } detail: {
-            Group {
-                switch router.pane {
-                case .general: GeneralPane()
-                case .transcription: TranscriptionPane()
-                case .profiles: ProfilesPane()
-                case .dictionary: DictionaryPane()
-                case .history: HistoryPane()
-                case .usage: UsagePane()
-                case .about: AboutPane()
+        VStack(spacing: 0) {
+            tabs
+                .padding(.top, 9)
+                .padding(.bottom, 10)
+            Rectangle().fill(Theme.hairline).frame(height: 1)
+
+            ScrollView {
+                Group {
+                    switch router.pane {
+                    case .general: GeneralPane()
+                    case .transcription: TranscriptionPane()
+                    case .profiles: ProfilesPane()
+                    case .dictionary: DictionaryPane()
+                    case .history: HistoryPane()
+                    }
                 }
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .navigationTitle(router.pane.title)
         }
-        .modifier(HideSidebarToggle())
-        .frame(minWidth: 640, minHeight: 440)
+        .frame(minWidth: 620, minHeight: 520)
+        .background(Theme.panelBackground)
+        .preferredColorScheme(.dark)
+    }
+
+    private var tabs: some View {
+        HStack(spacing: 2) {
+            ForEach(SettingsPane.allCases) { pane in
+                let isSelected = router.pane == pane
+                Button {
+                    router.pane = pane
+                } label: {
+                    Text(pane.title)
+                        .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
+                        .foregroundStyle(isSelected ? Theme.text : Theme.textTertiary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(isSelected ? Theme.raised : Color.clear))
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(2)
+        .background(Capsule().fill(Color.black.opacity(0.25)))
+        .frame(maxWidth: .infinity)
     }
 }
 
-private struct HideSidebarToggle: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(macOS 14.0, *) {
-            content.toolbar(removing: .sidebarToggle)
-        } else {
+/// Eyebrow label over a card.
+struct SettingsSection<Content: View>: View {
+    let title: String
+    var footnote: String? = nil
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Eyebrow(title).padding(.leading, 2)
             content
+            if let footnote {
+                Text(footnote)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.textTertiary)
+                    .padding(.leading, 2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
@@ -85,71 +103,103 @@ struct GeneralPane: View {
     @ObservedObject private var dictation = DictationController.shared
     @ObservedObject private var devices = AudioDeviceManager.shared
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
-    private let sounds = SoundPlayer()
+
+    private var settings: Binding<AppSettings> { $settingsManager.settings }
 
     var body: some View {
-        Form {
-            Section {
-                LabeledContent("Shortcut") { ShortcutRecorder() }
-                Picker("Mode", selection: $settingsManager.settings.hotkeyMode) {
-                    ForEach(HotkeyMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
+        VStack(alignment: .leading, spacing: 22) {
+            SettingsSection(title: "Shortcut", footnote: dictation.hotkeyError) {
+                Card {
+                    CardRow(title: "Dictate") { ShortcutRecorder() }
+                    CardRow(title: "Mode") {
+                        ChipPicker(options: [(HotkeyMode.hold, "Hold to talk"), (.toggle, "Press to toggle")],
+                                   selection: settings.hotkeyMode)
+                    }
+                    CardRow(title: "Stop automatically after", showsDivider: false) {
+                        ChipPicker(options: [(60.0, "1m"), (120, "2m"), (300, "5m"), (600, "10m")],
+                                   selection: settings.toggleTimeout, mono: true)
+                    }
                 }
-                Picker("Stop automatically after", selection: $settingsManager.settings.toggleTimeout) {
-                    ForEach([60.0, 120, 300, 600], id: \.self) { Text("\(Int($0 / 60)) min").tag($0) }
-                }
-                if let error = dictation.hotkeyError {
-                    Label(error, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                }
-            } header: {
-                Text("Dictation")
-            } footer: {
-                Text("Press Esc while recording to cancel.")
-                    .foregroundStyle(.secondary)
             }
 
-            Section("Audio") {
-                Picker("Microphone", selection: $settingsManager.settings.selectedAudioDeviceUID) {
-                    Text("System default").tag(String?.none)
+            SettingsSection(title: "Sound") {
+                Card {
+                    CardRow(title: "Sounds", detail: "One when you start, another when the text lands") {
+                        Switch(isOn: settings.playSounds)
+                    }
+                    CardRow(title: "Lower other audio while recording", showsDivider: settingsManager.settings.attenuateAudio) {
+                        Switch(isOn: settings.attenuateAudio)
+                    }
+                    if settingsManager.settings.attenuateAudio {
+                        CardRow(title: "Lower to", showsDivider: false) {
+                            HStack(spacing: 10) {
+                                Slider(value: settings.attenuationLevel, in: 0...0.8, step: 0.05)
+                                    .tint(Theme.accent)
+                                    .frame(width: 150)
+                                Text("\(Int(settingsManager.settings.attenuationLevel * 100))%")
+                                    .font(.mono(11))
+                                    .foregroundStyle(Theme.textSecondary)
+                                    .frame(width: 34, alignment: .trailing)
+                            }
+                        }
+                    }
+                }
+            }
+
+            SettingsSection(title: "Microphone") {
+                Card {
+                    micRow(name: "System default", uid: nil, last: devices.inputDevices.isEmpty)
                     ForEach(devices.inputDevices) { device in
-                        Text(device.name).tag(String?.some(device.uid))
-                    }
-                }
-                Picker("Start and stop sound", selection: $settingsManager.settings.feedbackSound) {
-                    Text("None").tag("")
-                    ForEach(SoundPlayer.choices, id: \.self) { Text($0).tag($0) }
-                }
-                .onChange(of: settingsManager.settings.feedbackSound) { sounds.play($0) }
-
-                Toggle("Lower other audio while recording", isOn: $settingsManager.settings.attenuateAudio)
-                if settingsManager.settings.attenuateAudio {
-                    LabeledContent("Lower to") {
-                        HStack {
-                            Slider(value: $settingsManager.settings.attenuationLevel, in: 0...0.8, step: 0.05)
-                                .frame(width: 160)
-                            Text("\(Int(settingsManager.settings.attenuationLevel * 100))%")
-                                .monospacedDigit()
-                                .foregroundStyle(.secondary)
-                                .frame(width: 36, alignment: .trailing)
-                        }
+                        micRow(name: device.name, uid: device.uid, last: device == devices.inputDevices.last)
                     }
                 }
             }
 
-            Section {
-                Toggle("Show a red border around the screen while recording", isOn: $settingsManager.settings.showScreenBorder)
-                Toggle("Open at login", isOn: $launchAtLogin)
-                    .onChange(of: launchAtLogin) { enabled in
-                        do {
-                            if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-                        } catch {
-                            print("[Settings] Login item change failed: \(error)")
-                            launchAtLogin = SMAppService.mainApp.status == .enabled
-                        }
+            SettingsSection(title: "System") {
+                Card {
+                    CardRow(title: "Red border around the screen while recording") {
+                        Switch(isOn: settings.showScreenBorder)
                     }
+                    CardRow(title: "Open at login", showsDivider: false) {
+                        Switch(isOn: $launchAtLogin)
+                            .onChange(of: launchAtLogin) { enabled in
+                                do {
+                                    if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+                                } catch {
+                                    print("[Settings] Login item change failed: \(error)")
+                                    launchAtLogin = SMAppService.mainApp.status == .enabled
+                                }
+                            }
+                    }
+                }
             }
+
+            HStack(spacing: 14) {
+                Text("SayStuff \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")")
+                Button("Check for updates") { AppDelegate.shared.checkForUpdates() }.buttonStyle(.plain)
+                Button("Run setup again") { AppDelegate.shared.showOnboarding() }.buttonStyle(.plain)
+                Button("App data") { NSWorkspace.shared.open(AppPaths.support) }.buttonStyle(.plain)
+            }
+            .font(.mono(10.5))
+            .foregroundStyle(Theme.textTertiary)
+            .padding(.leading, 2)
         }
-        .formStyle(.grouped)
+    }
+
+    private func micRow(name: String, uid: String?, last: Bool) -> some View {
+        let isSelected = settingsManager.settings.selectedAudioDeviceUID == uid
+        return Button {
+            settingsManager.settings.selectedAudioDeviceUID = uid
+        } label: {
+            CardRow(title: name, showsDivider: !last) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Theme.accent)
+                    .opacity(isSelected ? 1 : 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -157,99 +207,99 @@ struct GeneralPane: View {
 
 struct TranscriptionPane: View {
     @ObservedObject private var settingsManager = SettingsManager.shared
-    @State private var falKey = ""
+    @State private var showsFiles = false
 
     var body: some View {
-        Form {
-            Section {
-                Picker("Engine", selection: $settingsManager.settings.engine) {
-                    ForEach(TranscriptionEngine.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                }
-                .pickerStyle(.segmented)
-            } footer: {
-                Text(settingsManager.settings.engine == .local
-                     ? "Private and works offline. Speed depends on the model."
-                     : "Audio is sent to fal.ai for transcription. Fast on long dictations.")
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(spacing: 10) {
+                engineCard(.local, symbol: "laptopcomputer", title: "On this Mac", detail: "Private, offline, free")
+                engineCard(.cloud, symbol: "bolt.fill", title: "Cloud", detail: "fal Wizper v3 · fastest")
             }
 
             if settingsManager.settings.engine == .local {
-                Section("Model") {
-                    ForEach(WhisperModel.allCases, id: \.self) { ModelRow(model: $0) }
+                SettingsSection(title: "Model") {
+                    Card {
+                        ForEach(WhisperModel.allCases, id: \.self) { model in
+                            ModelRow(model: model)
+                        }
+                        Button {
+                            withAnimation(.easeOut(duration: 0.15)) { showsFiles.toggle() }
+                        } label: {
+                            CardRow(title: "Engine files", showsDivider: showsFiles) {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(Theme.textTertiary)
+                                    .rotationEffect(.degrees(showsFiles ? 90 : 0))
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        if showsFiles {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ThemedField(placeholder: "whisper-cli path", text: $settingsManager.settings.whisperPath, mono: true)
+                                HStack {
+                                    ThemedField(placeholder: "Models folder", text: $settingsManager.settings.modelDirectory, mono: true)
+                                    IconButton(symbol: "folder", help: "Show in Finder") {
+                                        NSWorkspace.shared.open(settingsManager.expandedModelDirectory)
+                                    }
+                                }
+                            }
+                            .padding(14)
+                        }
+                    }
                 }
             } else {
-                Section {
-                    LabeledContent("Provider", value: "fal.ai · Wizper v3")
-                    SecureField("API key", text: $falKey, prompt: Text("fal.ai key"))
-                        .disabled(true)
-                    ComingNextNote(text: "Cloud transcription is connected in the next step. Until then, dictation runs on this Mac.")
-                } header: {
-                    Text("Cloud")
+                SettingsSection(title: "fal.ai key",
+                                footnote: "If the cloud can't be reached, SayStuff falls back to your local model.") {
+                    Card { APIKeyRow(provider: .fal).padding(14) }
                 }
             }
 
-            Section {
-                Picker("Spoken language", selection: $settingsManager.settings.language) {
-                    ForEach(allSupportedLanguages) { Text($0.name).tag($0.code) }
-                }
-                Toggle("Add a space after inserted text", isOn: $settingsManager.settings.addTrailingSpace)
-            }
-
-            Section("Local engine files") {
-                LabeledContent("whisper-cli") {
-                    TextField("whisper-cli", text: $settingsManager.settings.whisperPath)
-                        .labelsHidden()
-                        .font(.system(size: 11.5, design: .monospaced))
-                }
-                LabeledContent("Models folder") {
-                    HStack {
-                        TextField("Models folder", text: $settingsManager.settings.modelDirectory)
-                            .labelsHidden()
-                            .font(.system(size: 11.5, design: .monospaced))
-                        Button {
-                            NSWorkspace.shared.open(settingsManager.expandedModelDirectory)
-                        } label: {
-                            Image(systemName: "folder")
+            SettingsSection(title: "Spoken language") {
+                FlowLayout(spacing: 6) {
+                    ForEach(allSupportedLanguages) { language in
+                        Chip(title: language.code == "auto" ? "Detect automatically" : language.name,
+                             isSelected: settingsManager.settings.language == language.code) {
+                            settingsManager.settings.selectLanguage(language.code)
                         }
-                        .help("Show in Finder")
                     }
                 }
             }
-        }
-        .formStyle(.grouped)
-    }
-}
 
-// MARK: - About
-
-struct AboutPane: View {
-    private var version: String {
-        let info = Bundle.main.infoDictionary
-        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = info?["CFBundleVersion"] as? String ?? "?"
-        return "Version \(short) (\(build))"
-    }
-
-    var body: some View {
-        Form {
-            Section {
-                HStack(spacing: 14) {
-                    Image(nsImage: NSApp.applicationIconImage)
-                        .resizable()
-                        .frame(width: 56, height: 56)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("SayStuff").font(.title3.weight(.semibold))
-                        Text(version).foregroundStyle(.secondary)
-                    }
+            Card {
+                CardRow(title: "Add a space after inserted text", showsDivider: false) {
+                    Switch(isOn: $settingsManager.settings.addTrailingSpace)
                 }
-                .padding(.vertical, 4)
             }
-            Section {
-                Button("Check for Updates…") { AppDelegate.shared.checkForUpdates() }
-                Button("Run Setup Again…") { AppDelegate.shared.showOnboarding() }
-                Button("Show App Data in Finder") { NSWorkspace.shared.open(AppPaths.support) }
-            }
+
+            SettingsSection(title: "Spend") { UsageCard() }
         }
-        .formStyle(.grouped)
+    }
+
+    private func engineCard(_ engine: TranscriptionEngine, symbol: String, title: String, detail: String) -> some View {
+        let isSelected = settingsManager.settings.engine == engine
+        return Button {
+            settingsManager.settings.engine = engine
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: symbol)
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundStyle(isSelected ? Theme.accent : Theme.textSecondary)
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.display(16)).foregroundStyle(Theme.text)
+                    Text(detail).font(.system(size: 11.5)).foregroundStyle(Theme.textTertiary)
+                }
+                Spacer()
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(isSelected ? Theme.accentSoft : Theme.surface))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(isSelected ? Theme.accent.opacity(0.55) : Theme.hairline)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }

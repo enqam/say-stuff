@@ -2,12 +2,13 @@ import SwiftUI
 import AVFoundation
 import Combine
 
-/// Three short steps: permissions, speech model, shortcut.
+/// Three short steps: permissions, engine, shortcut.
 struct OnboardingView: View {
     var onFinish: () -> Void
 
     @ObservedObject private var settingsManager = SettingsManager.shared
     @ObservedObject private var downloader = ModelDownloader.shared
+    @ObservedObject private var keys = APIKeys.shared
     @State private var step: Int
     @State private var hasMicrophone = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     @State private var hasAccessibility = AXIsProcessTrusted()
@@ -18,107 +19,111 @@ struct OnboardingView: View {
         _step = State(initialValue: initialStep)
     }
 
-    private var modelReady: Bool {
+    private var engineReady: Bool {
         _ = downloader.completedCount
-        return settingsManager.isModelDownloaded(settingsManager.settings.modelSize)
+        switch settingsManager.settings.engine {
+        case .local: return settingsManager.isModelDownloaded(settingsManager.settings.modelSize)
+        case .cloud: return keys.hasKey(.fal)
+        }
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             Group {
                 switch step {
                 case 0: permissions
-                case 1: model
+                case 1: engine
                 default: shortcut
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(.horizontal, 32)
-            .padding(.top, 44)
+            .padding(.top, 46)
 
             HStack {
                 HStack(spacing: 6) {
                     ForEach(0..<3) { index in
-                        Circle()
-                            .fill(index == step ? Color.accentColor : Color.secondary.opacity(0.3))
-                            .frame(width: 6, height: 6)
+                        Capsule()
+                            .fill(index == step ? Theme.accent : Theme.hairlineStrong)
+                            .frame(width: index == step ? 18 : 6, height: 6)
                     }
                 }
+                .animation(.easeOut(duration: 0.2), value: step)
                 Spacer()
                 if step > 0 {
-                    Button("Back") { step -= 1 }
+                    Button("Back") { step -= 1 }.buttonStyle(PillButtonStyle())
                 }
-                Button(step == 2 ? "Done" : "Continue") {
+                Button(step == 2 ? "Start dictating" : "Continue") {
                     if step == 2 { onFinish() } else { step += 1 }
                 }
+                .buttonStyle(PillButtonStyle(prominent: true))
                 .keyboardShortcut(.defaultAction)
-                .disabled(step == 1 && !modelReady)
+                .disabled(step == 1 && !engineReady)
             }
             .padding(20)
         }
-        .frame(width: 480, height: 460)
+        .frame(width: 500, height: 500)
+        .background(Theme.panelBackground)
+        .preferredColorScheme(.dark)
         .onReceive(permissionTimer) { _ in refreshPermissions() }
     }
 
     // MARK: Steps
 
     private var permissions: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            title("Talk, and it types.", "SayStuff needs two permissions to listen and to paste into other apps.")
-
-            VStack(spacing: 10) {
-                PermissionRow(
-                    symbol: "mic",
-                    title: "Microphone",
-                    detail: "To hear you while the shortcut is active.",
-                    isGranted: hasMicrophone,
-                    action: requestMicrophone
-                )
-                PermissionRow(
-                    symbol: "keyboard",
-                    title: "Accessibility",
-                    detail: "To paste the text where your cursor is.",
-                    isGranted: hasAccessibility,
-                    action: requestAccessibility
-                )
+        VStack(alignment: .leading, spacing: 22) {
+            title("Talk, and it types.", "SayStuff needs to hear you and to paste where your cursor is.")
+            Card {
+                PermissionRow(symbol: "mic", title: "Microphone", detail: "Only while the shortcut is active",
+                              isGranted: hasMicrophone, action: requestMicrophone)
+                Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 52)
+                PermissionRow(symbol: "keyboard", title: "Accessibility", detail: "To paste into any app",
+                              isGranted: hasAccessibility, action: requestAccessibility)
             }
         }
     }
 
-    private var model: some View {
+    private var engine: some View {
         VStack(alignment: .leading, spacing: 18) {
-            title("Pick a speech model", "Runs entirely on your Mac. You can switch or add a cloud engine later.")
-            VStack(spacing: 12) {
-                ForEach(WhisperModel.allCases, id: \.self) { ModelRow(model: $0) }
+            title("How should it listen?", "You can switch any time from the menu bar.")
+            ChipPicker(options: [(TranscriptionEngine.local, "On this Mac"), (.cloud, "Cloud · fal.ai")],
+                       selection: $settingsManager.settings.engine)
+            if settingsManager.settings.engine == .local {
+                Card {
+                    ForEach(WhisperModel.allCases, id: \.self) { model in
+                        ModelRow(model: model, showsDivider: model != WhisperModel.allCases.last)
+                    }
+                }
+            } else {
+                Card { APIKeyRow(provider: .fal).padding(14) }
             }
         }
     }
 
     private var shortcut: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            title("You're set", "Put your cursor in any text field, use the shortcut and start talking.")
-            VStack(spacing: 12) {
-                LabeledContent("Shortcut") { ShortcutRecorder() }
-                Picker("Mode", selection: $settingsManager.settings.hotkeyMode) {
-                    ForEach(HotkeyMode.allCases, id: \.self) { Text($0.displayName).tag($0) }
+        VStack(alignment: .leading, spacing: 22) {
+            title("You're set.", "Put your cursor in any text field, press the shortcut and talk.")
+            Card {
+                CardRow(title: "Shortcut") { ShortcutRecorder() }
+                CardRow(title: "Mode", showsDivider: false) {
+                    ChipPicker(options: [(HotkeyMode.hold, "Hold to talk"), (.toggle, "Press to toggle")],
+                               selection: $settingsManager.settings.hotkeyMode)
                 }
-                .pickerStyle(.segmented)
             }
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.04)))
-
-            Text("SayStuff lives in the menu bar (\(Image(systemName: "waveform"))). Click it to switch output profiles or see recent text.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            Text("Pick an output profile (Raw, Prompt, Formal) from the \(Image(systemName: "waveform")) menu bar icon.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.textTertiary)
         }
     }
 
     private func title(_ title: String, _ subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.system(size: 22, weight: .semibold))
+                .font(.display(30))
+                .foregroundStyle(Theme.text)
             Text(subtitle)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -154,28 +159,22 @@ private struct PermissionRow: View {
     let action: () -> Void
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             Image(systemName: symbol)
-                .font(.system(size: 16))
-                .frame(width: 28)
-                .foregroundStyle(Color.accentColor)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(isGranted ? Theme.success : Theme.accent)
+                .frame(width: 24)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).fontWeight(.medium)
-                Text(detail)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                Text(title).font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.text)
+                Text(detail).font(.system(size: 11.5)).foregroundStyle(Theme.textTertiary)
             }
             Spacer()
             if isGranted {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.system(size: 18))
-                    .foregroundStyle(.green)
-                    .accessibilityLabel("Allowed")
+                Text("ALLOWED").font(.mono(10, weight: .bold)).foregroundStyle(Theme.success)
             } else {
-                Button("Allow", action: action)
+                Button("Allow", action: action).buttonStyle(PillButtonStyle(prominent: true))
             }
         }
         .padding(14)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.04)))
     }
 }

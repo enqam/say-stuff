@@ -1,88 +1,53 @@
 import SwiftUI
 
-struct UsagePane: View {
+/// Month-to-date API spend, from per-request records (fal audio length or compute time, Groq tokens).
+struct UsageCard: View {
     @ObservedObject private var ledger = UsageLedger.shared
-    @State private var range: Range = .month
-
-    enum Range: String, CaseIterable {
-        case month = "This month"
-        case all = "All time"
-    }
+    @State private var allTime = false
 
     private var records: [UsageRecord] {
-        range == .month ? ledger.records(since: UsageLedger.startOfMonth) : ledger.records
+        allTime ? ledger.records : ledger.records(since: UsageLedger.startOfMonth)
     }
 
     var body: some View {
-        Form {
-            Section {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(total(records), format: .currency(code: "USD").precision(.fractionLength(2...4)))
-                        .font(.system(size: 30, weight: .semibold, design: .rounded))
-                        .monospacedDigit()
-                    Spacer()
-                    Picker("Range", selection: $range) {
-                        ForEach(Range.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }
-                    .labelsHidden()
-                    .fixedSize()
+        Card {
+            HStack(alignment: .firstTextBaseline) {
+                Text(total(records).usdString)
+                    .font(.mono(28, weight: .semibold))
+                    .foregroundStyle(Theme.text)
+                if records.contains(where: \.isEstimate) {
+                    Text("≈")
+                        .font(.mono(14))
+                        .foregroundStyle(Theme.textTertiary)
+                        .help("Some fal requests are billed by compute time; those use measured request time.")
                 }
-                .padding(.vertical, 2)
-            } footer: {
-                Text("Calculated from each provider's published price and the exact audio length or token count of every request. Local transcription is free.")
-                    .foregroundStyle(.secondary)
+                Spacer()
+                ChipPicker(options: [(false, "This month"), (true, "All time")], selection: $allTime)
             }
+            .padding(14)
+            Rectangle().fill(Theme.hairline).frame(height: 1).padding(.leading, 14)
 
-            Section("Breakdown") {
-                breakdownRow(
-                    title: "Transcription",
-                    provider: "fal.ai · Wizper v3",
-                    detail: minutes(records.filter { $0.service == .transcription }),
-                    cost: total(records.filter { $0.service == .transcription })
-                )
-                breakdownRow(
-                    title: "Formatting",
-                    provider: "Groq · gpt-oss-20b",
-                    detail: tokens(records.filter { $0.service == .formatting }),
-                    cost: total(records.filter { $0.service == .formatting })
-                )
+            breakdown(.transcription, title: "Transcription", provider: "fal Wizper v3") { seconds in
+                String(format: "%.1f min audio", seconds / 60)
             }
-
-            Section {
-                ComingNextNote(text: "Costs start counting once the cloud engine and formatting are connected.")
-                if !ledger.records.isEmpty {
-                    Button("Reset Usage", role: .destructive) { ledger.reset() }
-                }
+            breakdown(.formatting, title: "Formatting", provider: "Groq gpt-oss-20b", last: true) { tokens in
+                "\(Int(tokens).formatted()) tokens"
             }
         }
-        .formStyle(.grouped)
     }
 
-    private func breakdownRow(title: String, provider: String, detail: String, cost: Decimal) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                Text("\(provider) · \(detail)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Text(cost, format: .currency(code: "USD").precision(.fractionLength(2...4)))
-                .monospacedDigit()
+    private func breakdown(_ service: UsageRecord.Service, title: String, provider: String, last: Bool = false,
+                           quantity: (Double) -> String) -> some View {
+        let items = records.filter { $0.service == service }
+        return CardRow(title: title, detail: "\(provider) · \(items.count) requests · \(quantity(items.reduce(0) { $0 + $1.quantity }))",
+                       showsDivider: !last) {
+            Text(total(items).usdString)
+                .font(.mono(12))
+                .foregroundStyle(Theme.textSecondary)
         }
     }
 
     private func total(_ records: [UsageRecord]) -> Decimal {
         records.reduce(Decimal(0)) { $0 + $1.costUSD }
-    }
-
-    private func minutes(_ records: [UsageRecord]) -> String {
-        let seconds = records.reduce(0) { $0 + $1.quantity }
-        return String(format: "%.1f min", seconds / 60)
-    }
-
-    private func tokens(_ records: [UsageRecord]) -> String {
-        let count = Int(records.reduce(0) { $0 + $1.quantity })
-        return "\(count.formatted()) tokens"
     }
 }

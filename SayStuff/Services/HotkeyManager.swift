@@ -6,7 +6,6 @@ import Carbon.HIToolbox
 final class HotkeyManager {
     enum ID: UInt32 {
         case dictation = 1
-        case cancel = 2
     }
 
     var onEvent: ((ID, _ isPress: Bool) -> Void)?

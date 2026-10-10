@@ -57,6 +57,8 @@ struct AppSettings: Codable, Equatable {
     var whisperPath: String = "/usr/local/bin/whisper-cli"
     var modelDirectory: String = "~/Library/Application Support/SayStuff/models"
     var language: String = "auto"
+    /// Languages offered as one-click chips in the menu, most recent first.
+    var recentLanguages: [String] = ["en", "ru"]
     var addTrailingSpace: Bool = true
 
     // Output
@@ -72,7 +74,7 @@ struct AppSettings: Codable, Equatable {
 
     // Audio & feedback
     var selectedAudioDeviceUID: String? = nil  // nil = system default
-    var feedbackSound: String = "Funk"  // empty = no sound
+    var playSounds: Bool = true
     var attenuateAudio: Bool = true
     var attenuationLevel: Float = 0.25
     var showScreenBorder: Bool = false
@@ -97,6 +99,7 @@ struct AppSettings: Codable, Equatable {
         whisperPath = value(.whisperPath, d.whisperPath)
         modelDirectory = value(.modelDirectory, d.modelDirectory)
         language = value(.language, UserDefaults.standard.string(forKey: "selectedLanguage") ?? d.language)
+        recentLanguages = value(.recentLanguages, d.recentLanguages)
         addTrailingSpace = value(.addTrailingSpace, d.addTrailingSpace)
         activeProfileID = value(.activeProfileID, d.activeProfileID)
         learnCorrections = value(.learnCorrections, d.learnCorrections)
@@ -110,15 +113,16 @@ struct AppSettings: Codable, Equatable {
         attenuationLevel = value(.attenuationLevel, d.attenuationLevel)
         showScreenBorder = value(.showScreenBorder, d.showScreenBorder)
         hasCompletedOnboarding = value(.hasCompletedOnboarding, d.hasCompletedOnboarding)
-
-        // Older builds stored an on/off `playSounds` flag instead of a sound name.
-        let legacy = try decoder.container(keyedBy: LegacyKeys.self)
-        let legacySoundsOff = (try? legacy.decodeIfPresent(Bool.self, forKey: .playSounds)) == false
-        feedbackSound = value(.feedbackSound, legacySoundsOff ? "" : d.feedbackSound)
+        playSounds = value(.playSounds, d.playSounds)
     }
 
-    private enum LegacyKeys: String, CodingKey {
-        case playSounds
+    /// Picks the spoken language and keeps it in the menu's quick chips.
+    mutating func selectLanguage(_ code: String) {
+        language = code
+        guard code != "auto" else { return }
+        recentLanguages.removeAll { $0 == code }
+        recentLanguages.insert(code, at: 0)
+        recentLanguages = Array(recentLanguages.prefix(3))
     }
 }
 

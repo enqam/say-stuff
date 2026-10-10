@@ -15,6 +15,8 @@ struct UsageRecord: Codable, Identifiable {
     /// Audio seconds for transcription, tokens for formatting.
     var quantity: Double
     var costUSD: Decimal
+    /// True when the provider bills by compute time and the cost was derived from request time.
+    var isEstimate = false
 }
 
 final class UsageLedger: ObservableObject {

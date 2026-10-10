@@ -7,7 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private(set) static var shared: AppDelegate!
 
     private var statusItem: NSStatusItem!
-    private var popover: NSPopover!
+    private var menuPanel: MenuPanel!
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private let updateManager = UpdateManager()
@@ -59,12 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
-        popover = NSPopover()
-        popover.behavior = .transient
-        popover.animates = true
-        let host = NSHostingController(rootView: MenuBarView())
-        host.sizingOptions = .preferredContentSize
-        popover.contentViewController = host
+        menuPanel = MenuPanel { resize in MenuBarView(onHeightChange: resize) }
     }
 
     private func updateStatusIcon(for phase: DictationController.Phase) {
@@ -74,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             button.contentTintColor = nil
             button.alphaValue = 1
         case .recording:
-            button.contentTintColor = .systemRed
+            button.contentTintColor = Theme.nsAccent
             button.alphaValue = 1
         case .processing:
             button.contentTintColor = nil
@@ -84,34 +79,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func togglePopover() {
         guard let button = statusItem.button else { return }
-        if popover.isShown {
-            popover.performClose(nil)
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            popover.contentViewController?.view.window?.makeKey()
-        }
+        menuPanel.toggle(from: button)
     }
 
     // MARK: - Windows
 
     func openSettings(_ pane: SettingsPane? = nil) {
-        popover.performClose(nil)
+        menuPanel.close()
         if let pane { SettingsRouter.shared.pane = pane }
 
         if settingsWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 720, height: 520),
+                contentRect: NSRect(x: 0, y: 0, width: 640, height: 640),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
             window.title = "SayStuff"
+            window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
-            window.toolbarStyle = .unified
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.backgroundColor = NSColor(red: 0.075, green: 0.071, blue: 0.067, alpha: 1)
             window.contentViewController = NSHostingController(rootView: SettingsView())
-            window.setContentSize(NSSize(width: 720, height: 520))
-            window.minSize = NSSize(width: 640, height: 440)
+            window.setContentSize(NSSize(width: 640, height: 640))
+            window.minSize = NSSize(width: 620, height: 520)
             window.isReleasedWhenClosed = false
             window.delegate = self
             window.center()
@@ -122,10 +113,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func showOnboarding() {
-        popover.performClose(nil)
+        menuPanel.close()
         if onboardingWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 480, height: 460),
+                contentRect: NSRect(x: 0, y: 0, width: 500, height: 500),
                 styleMask: [.titled, .closable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
@@ -133,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.isMovableByWindowBackground = true
+            window.appearance = NSAppearance(named: .darkAqua)
             window.contentViewController = NSHostingController(rootView: OnboardingView { [weak self] in
                 SettingsManager.shared.settings.hasCompletedOnboarding = true
                 self?.onboardingWindow?.close()

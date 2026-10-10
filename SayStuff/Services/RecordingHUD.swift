@@ -18,7 +18,7 @@ final class RecordingHUD {
         static let dotSize: CGFloat = 7
         static let padding: CGFloat = 14
         static let dotGap: CGFloat = 10
-        static let bottomInset: CGFloat = 26
+        static let gapAboveDock: CGFloat = 22
         static let frameInterval: CFTimeInterval = 1.0 / 30
         static var barsWidth: CGFloat { CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barGap }
         static var pillWidth: CGFloat { padding * 2 + dotSize + dotGap + barsWidth }
@@ -61,15 +61,15 @@ final class RecordingHUD {
         pill.wantsLayer = true
         pill.appearance = NSAppearance(named: .darkAqua)
         if let layer = pill.layer {
-            layer.backgroundColor = NSColor(white: 0.07, alpha: 0.94).cgColor
+            layer.backgroundColor = NSColor(red: 0.086, green: 0.082, blue: 0.075, alpha: 0.96).cgColor
             layer.cornerRadius = Metrics.height / 2
             layer.cornerCurve = .continuous
             layer.borderWidth = 0.5
-            layer.borderColor = NSColor(white: 1, alpha: 0.14).cgColor
+            layer.borderColor = NSColor(white: 1, alpha: 0.12).cgColor
         }
         panel.contentView = pill
 
-        dot.backgroundColor = NSColor.systemRed.cgColor
+        dot.backgroundColor = Theme.nsAccent.cgColor
         dot.cornerRadius = Metrics.dotSize / 2
         pill.layer?.addSublayer(dot)
 
@@ -106,7 +106,7 @@ final class RecordingHUD {
         setWaveformVisible(true)
         layoutWaveform()
         stopShimmer()
-        dot.backgroundColor = NSColor.systemRed.cgColor
+        dot.backgroundColor = Theme.nsAccent.cgColor
         pulseDot()
         present()
     }
@@ -234,9 +234,8 @@ final class RecordingHUD {
 
     private func present() {
         guard !panel.isVisible || panel.alphaValue < 1 else { return }
-        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
-        if let visible = screen?.visibleFrame {
-            panel.setFrameOrigin(NSPoint(x: visible.midX - panel.frame.width / 2, y: visible.minY + Metrics.bottomInset))
+        if let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main {
+            panel.setFrameOrigin(NSPoint(x: screen.frame.midX - panel.frame.width / 2, y: Self.baseline(on: screen)))
         }
         if !panel.isVisible { panel.alphaValue = 0 }
         panel.orderFrontRegardless()
@@ -252,6 +251,14 @@ final class RecordingHUD {
             context.duration = 0.12
             panel.animator().alphaValue = 1
         }
+    }
+
+    /// Sits above the Dock even when the Dock auto-hides (its space isn't reserved then).
+    private static func baseline(on screen: NSScreen) -> CGFloat {
+        let reserved = screen.visibleFrame.minY - screen.frame.minY
+        let tileSize = UserDefaults(suiteName: "com.apple.dock")?.double(forKey: "tilesize") ?? 0
+        let dockHeight = (tileSize > 0 ? tileSize : 48) + 20
+        return screen.frame.minY + max(reserved, dockHeight) + Metrics.gapAboveDock
     }
 
     // MARK: - Animations (run on the render server)

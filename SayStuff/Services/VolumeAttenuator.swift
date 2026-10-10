@@ -19,7 +19,7 @@ final class VolumeAttenuator {
     private let savedDeviceKey = "VolumeAttenuator_savedDevice"
 
     private let fadeDownDuration: Double = 0.45
-    private let fadeUpDuration: Double = 0.3
+    static let fadeUpDuration: Double = 0.3
     private let tickRate: Double = 120
 
     init() {
@@ -47,7 +47,7 @@ final class VolumeAttenuator {
                 if let completion { DispatchQueue.main.async(execute: completion) }
                 return
             }
-            fade(device: device, to: target, duration: fadeUpDuration) { [self] in
+            fade(device: device, to: target, duration: Self.fadeUpDuration) { [self] in
                 clearSavedState()
                 if let completion { DispatchQueue.main.async(execute: completion) }
             }

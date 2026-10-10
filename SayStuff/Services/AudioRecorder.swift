@@ -52,6 +52,12 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
     private var reusablePCMBuffer: AVAudioPCMBuffer?
     private var reusableMonoBuffer: AVAudioPCMBuffer?
     private var reusableWriteBuffer: AVAudioPCMBuffer?
+    private var reusableResampledBuffer: AVAudioPCMBuffer?
+
+    // Everything is written as 16 kHz mono: what Whisper uses internally, and a third of
+    // the upload size of 48 kHz for the cloud engine.
+    private static let outputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+    private var converter: AVAudioConverter?
 
     func start(deviceUID: String?, completion: @escaping (Error?) -> Void) {
         sessionQueue.async { [self] in
@@ -125,6 +131,7 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
 
     private func beginFile() {
         discardFile()
+        converter?.reset()
         fileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("saystuff_recording_\(UUID().uuidString).wav")
         framesWritten = 0
@@ -176,9 +183,10 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
         } else {
             monoBuffer = pcmBuffer
         }
+        guard let buffer = resampled(monoBuffer) else { return }
 
         if audioFile == nil {
-            sampleRate = monoBuffer.format.sampleRate
+            sampleRate = Self.outputFormat.sampleRate
             do {
                 audioFile = try AVAudioFile(
                     forWriting: url,
@@ -197,8 +205,8 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
             }
         }
 
-        guard let channel = monoBuffer.floatChannelData?[0], monoBuffer.frameLength > 0 else { return }
-        let frames = UnsafeBufferPointer(start: channel, count: Int(monoBuffer.frameLength))
+        guard let channel = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return }
+        let frames = UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength))
 
         var rms: Float = 0
         vDSP_rmsqv(channel, 1, &rms, vDSP_Length(frames.count))
@@ -233,6 +241,33 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
                 pendingSilence.removeSubrange(keepHead..<(keepHead + overflow))
             }
         }
+    }
+
+    private func resampled(_ input: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        let output = Self.outputFormat
+        if input.format.sampleRate == output.sampleRate { return input }
+        if converter == nil || converter?.inputFormat != input.format {
+            converter = AVAudioConverter(from: input.format, to: output)
+        }
+        guard let converter else { return nil }
+        let capacity = AVAudioFrameCount(Double(input.frameLength) * output.sampleRate / input.format.sampleRate) + 64
+        guard let buffer = reusableBuffer(&reusableResampledBuffer, format: output, frames: capacity) else { return nil }
+        var supplied = false
+        var error: NSError?
+        let status = converter.convert(to: buffer, error: &error) { _, inputStatus in
+            if supplied {
+                inputStatus.pointee = .noDataNow  // keep filter state for the next buffer
+                return nil
+            }
+            supplied = true
+            inputStatus.pointee = .haveData
+            return input
+        }
+        guard status != .error else {
+            print("[AudioRecorder] Resample failed: \(String(describing: error))")
+            return nil
+        }
+        return buffer
     }
 
     private func samples(_ seconds: Double) -> Int {

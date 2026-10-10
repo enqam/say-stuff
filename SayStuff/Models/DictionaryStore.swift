@@ -61,21 +61,21 @@ final class DictionaryStore: ObservableObject {
         return prompt.isEmpty ? nil : prompt
     }
 
+    /// A snapshot of the mishearing fixes, safe to use off the main thread.
     /// Swaps known mishearings for the correct term (whole words, case-insensitive).
-    func apply(to text: String) -> String {
-        var result = text
-        for entry in entries {
-            for variant in entry.heardAs {
+    func replacer() -> (String) -> String {
+        let rules: [(NSRegularExpression, String)] = entries.flatMap { entry in
+            entry.heardAs.compactMap { variant in
                 let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: variant) + "(?![\\p{L}\\p{N}])"
-                guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { continue }
-                result = regex.stringByReplacingMatches(
-                    in: result,
-                    range: NSRange(result.startIndex..., in: result),
-                    withTemplate: NSRegularExpression.escapedTemplate(for: entry.term)
-                )
+                guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return nil }
+                return (regex, NSRegularExpression.escapedTemplate(for: entry.term))
             }
         }
-        return result
+        return { text in
+            rules.reduce(text) { result, rule in
+                rule.0.stringByReplacingMatches(in: result, range: NSRange(result.startIndex..., in: result), withTemplate: rule.1)
+            }
+        }
     }
 
     private func save() {

@@ -23,13 +23,13 @@ enum UISnapshots {
 
         var jobs: [Job] = [Job(name: "popover", size: nil) { AnyView(MenuBarView()) }]
         for pane in SettingsPane.allCases {
-            jobs.append(Job(name: "settings-\(pane.rawValue)", size: NSSize(width: 720, height: 560)) {
+            jobs.append(Job(name: "settings-\(pane.rawValue)", size: NSSize(width: 640, height: 900)) {
                 SettingsRouter.shared.pane = pane
                 return AnyView(SettingsView())
             })
         }
         for step in 0..<3 {
-            jobs.append(Job(name: "onboarding-\(step + 1)", size: NSSize(width: 480, height: 460)) {
+            jobs.append(Job(name: "onboarding-\(step + 1)", size: NSSize(width: 500, height: 500)) {
                 AnyView(OnboardingView(initialStep: step) {})
             })
         }
