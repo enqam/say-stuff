@@ -160,10 +160,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if !othersOpen { NSApp.setActivationPolicy(.accessory) }
     }
 
-    /// Notice under the menu bar icon, independent of the recording pill.
-    func showBanner(_ message: String, symbol: String, actionTitle: String? = nil, action: (() -> Void)? = nil) {
-        banner.show(message, symbol: symbol, actionTitle: actionTitle, below: statusItem.button, action: action)
+    /// Keep correction feedback beside the edited text without taking keyboard focus.
+    func showDictionaryNotice(term: String, heardAs heard: String, near anchor: NSRect?,
+                              highlight: NSRect?, field: NSRect?, undo: @escaping () -> Void) {
+        banner.show(term: term, heardAs: heard, near: anchor, highlight: highlight, field: field, undo: undo)
     }
+
+    func hideDictionaryNotice() { banner.hide() }
 
     func checkForUpdates() {
         updateManager.checkForUpdates()

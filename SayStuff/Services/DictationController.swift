@@ -59,6 +59,7 @@ final class DictationController: ObservableObject {
         corrections.onLearn = { [weak self] term, heard in
             self?.learn(term: term, heardAs: heard)
         }
+        corrections.onTextChanged = { AppDelegate.shared?.hideDictionaryNotice() }
     }
 
     func start() {
@@ -507,11 +508,15 @@ final class DictationController: ObservableObject {
 
     private func learn(term: String, heardAs heard: String) {
         let dictionary = DictionaryStore.shared
-        let existed = dictionary.entries.contains { $0.term.caseInsensitiveCompare(term) == .orderedSame }
+        let existing = dictionary.entries.first { $0.term.caseInsensitiveCompare(term) == .orderedSame }
+        guard existing?.heardAs.contains(where: { $0.caseInsensitiveCompare(heard) == .orderedSame }) != true else { return }
+        let existed = existing != nil
         dictionary.add(term: term, heardAs: [heard], learned: true)
         print("[Dictation] Learned \(term) (heard \(heard))")
-        AppDelegate.shared.showBanner("Added “\(term)” to Dictionary", symbol: "character.book.closed",
-                                      actionTitle: "Undo") {
+        AppDelegate.shared.showDictionaryNotice(term: term, heardAs: heard,
+                                                  near: corrections.correctionAnchor,
+                                                  highlight: corrections.correctedWordFrame,
+                                                  field: corrections.textFieldFrame) {
             dictionary.forget(term: term, heardAs: heard, removeTerm: !existed)
         }
     }

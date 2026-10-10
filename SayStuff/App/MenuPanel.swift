@@ -100,16 +100,25 @@ final class MenuPanel {
     }
 }
 
-/// Small notice under the status item ("Added “Cerebras” to Dictionary · Undo").
-/// Separate from the recording pill so it's visible after the pill is gone.
+/// Contextual learning feedback anchored to the corrected text, separate from the recording HUD.
 @MainActor
 final class StatusBanner {
     private let panel: NSPanel
+    private let bracketPanel: NSPanel
     private var hideWork: DispatchWorkItem?
+    private var dismissalMonitor: Any?
+    private var generation = UUID()
 
     init() {
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 44),
-                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        panel = Self.makePanel()
+        bracketPanel = Self.makePanel()
+        bracketPanel.ignoresMouseEvents = true
+        bracketPanel.hasShadow = false
+    }
+
+    private static func makePanel() -> NSPanel {
+        let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: true)
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
@@ -117,68 +126,129 @@ final class StatusBanner {
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+        return panel
     }
 
-    func show(_ message: String, symbol: String, actionTitle: String? = nil, below button: NSStatusBarButton?,
-              duration: TimeInterval = 5, action: (() -> Void)? = nil) {
+    func show(term: String, heardAs heard: String, near word: NSRect?, highlight: NSRect?, field: NSRect?,
+              duration: TimeInterval = 6, undo: @escaping () -> Void) {
         hideWork?.cancel()
-        let host = NSHostingView(rootView: BannerView(message: message, symbol: symbol, actionTitle: actionTitle) { [weak self] in
-            action?()
+        if let dismissalMonitor { NSEvent.removeMonitor(dismissalMonitor) }
+        dismissalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .scrollWheel]) { [weak self] _ in
+            Task { @MainActor in self?.hide() }
+        }
+        generation = UUID()
+        let host = NSHostingView(rootView: DictionaryNoticeView(term: term, heardAs: heard) { [weak self] in
+            undo()
             self?.hide()
         })
         panel.contentView = host
-        let size = host.fittingSize
+        let anchor = word ?? field ?? NSRect(origin: NSEvent.mouseLocation, size: .zero)
+        let screen = NSScreen.screens.first { $0.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY)) }
+            ?? NSScreen.main ?? NSScreen.screens.first
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1200, height: 800)
+        let fitting = host.fittingSize
+        let size = NSSize(width: min(fitting.width, visible.width - 24), height: fitting.height)
         panel.setContentSize(size)
+        panel.setFrame(Self.noticeFrame(size: size, near: anchor, within: visible), display: false)
 
-        if let button, let window = button.window {
-            let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
-            var x = anchor.midX - size.width / 2
-            if let visible = window.screen?.visibleFrame {
-                x = min(max(x, visible.minX + 8), visible.maxX - size.width - 8)
-            }
-            panel.setFrameTopLeftPoint(NSPoint(x: x, y: anchor.minY - 6))
+        if let highlight, highlight.intersects(visible) {
+            bracketPanel.contentView = NSHostingView(rootView: CorrectionBracket().stroke(Theme.accent, style: StrokeStyle(lineWidth: 1.5, lineCap: .round)).padding(1))
+            bracketPanel.setFrame(highlight.insetBy(dx: -4, dy: -3), display: false)
+            bracketPanel.alphaValue = 1
+            bracketPanel.orderFrontRegardless()
+        } else {
+            bracketPanel.orderOut(nil)
         }
         panel.alphaValue = 0
         panel.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { $0.duration = 0.15; panel.animator().alphaValue = 1 }
-
+        NSAnimationContext.runAnimationGroup {
+            $0.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.15
+            panel.animator().alphaValue = 1
+        }
         let work = DispatchWorkItem { [weak self] in self?.hide() }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
     }
 
+    /// Prefer directly below the word; flip above it at the bottom of the screen.
+    static func noticeFrame(size: NSSize, near anchor: NSRect, within visible: NSRect) -> NSRect {
+        let gap: CGFloat = 8
+        let margin: CGFloat = 12
+        let x = min(max(anchor.minX - 4, visible.minX + margin), visible.maxX - size.width - margin)
+        let below = anchor.minY - gap - size.height
+        let y = below >= visible.minY + margin ? below : anchor.maxY + gap
+        return NSRect(x: x, y: min(max(y, visible.minY + margin), visible.maxY - size.height - margin),
+                      width: size.width, height: size.height)
+    }
+
     func hide() {
         hideWork?.cancel()
-        NSAnimationContext.runAnimationGroup({ $0.duration = 0.2; panel.animator().alphaValue = 0 },
-                                             completionHandler: { [weak self] in
-                                                 Task { @MainActor in self?.panel.orderOut(nil) }
-                                             })
+        hideWork = nil
+        if let dismissalMonitor { NSEvent.removeMonitor(dismissalMonitor) }
+        dismissalMonitor = nil
+        guard panel.isVisible || bracketPanel.isVisible else { return }
+        let expected = generation
+        NSAnimationContext.runAnimationGroup({
+            $0.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.15
+            panel.animator().alphaValue = 0
+            bracketPanel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            Task { @MainActor in
+                guard let self, self.generation == expected else { return }
+                self.panel.orderOut(nil)
+                self.bracketPanel.orderOut(nil)
+            }
+        })
     }
 }
 
-private struct BannerView: View {
-    let message: String
-    let symbol: String
-    let actionTitle: String?
-    let action: () -> Void
+/// Two small brackets identify the corrected word without covering its letters.
+private struct CorrectionBracket: Shape {
+    func path(in rect: CGRect) -> Path {
+        let arm = min(6, rect.width / 3)
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + arm, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX + arm, y: rect.maxY))
+        path.move(to: CGPoint(x: rect.maxX - arm, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.maxX - arm, y: rect.maxY))
+        return path
+    }
+}
+
+private struct DictionaryNoticeView: View {
+    let term: String
+    let heardAs: String
+    let undo: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: symbol)
+            Image(systemName: "character.book.closed")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.accent)
-            Text(message)
-                .font(.system(size: 12.5, weight: .medium))
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(heardAs).foregroundStyle(Theme.textSecondary)
+                    Image(systemName: "arrow.right").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.textSecondary)
+                    Text(term).fontWeight(.semibold)
+                }
+                .font(.system(size: 12.5))
                 .lineLimit(1)
-                .fixedSize()
-            if let actionTitle {
-                Button(actionTitle, action: action)
-                    .buttonStyle(PillButtonStyle())
+                Text("Added to Dictionary")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.textSecondary)
             }
+            Button("Undo", action: undo)
+                .buttonStyle(PillButtonStyle())
         }
-        .padding(.leading, 14)
-        .padding(.trailing, actionTitle == nil ? 14 : 7)
-        .padding(.vertical, 7)
-        .glassSurface(Capsule())
+        .padding(.leading, 12)
+        .padding(.trailing, 7)
+        .padding(.vertical, 8)
+        .glassSurface(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Added \(term) to Dictionary, heard as \(heardAs)")
     }
 }

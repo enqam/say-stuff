@@ -160,6 +160,13 @@ struct CorrectionLearningSession {
 @MainActor
 final class CorrectionWatcher {
     var onLearn: ((String, String) -> Void)?
+    var onTextChanged: (() -> Void)?
+    private(set) var correctionAnchor: NSRect?
+    private(set) var correctedWordFrame: NSRect?
+    private(set) var textFieldFrame: NSRect?
+    private var observedValue = ""
+    private var editedRange: NSRange?
+    private var editedWordFrame: NSRect?
 
     private var element: AXUIElement?
     private var session: CorrectionLearningSession?
@@ -190,6 +197,12 @@ final class CorrectionWatcher {
         }
         observer = nil
         element = nil
+        observedValue = ""
+        editedRange = nil
+        editedWordFrame = nil
+        correctionAnchor = nil
+        correctedWordFrame = nil
+        textFieldFrame = nil
     }
 
     /// Check immediately after paste, then retry while the target app applies it.
@@ -200,6 +213,8 @@ final class CorrectionWatcher {
            let session = CorrectionLearningSession(pasted: text, initialValue: value) {
             element = focused
             self.session = session
+            observedValue = value
+            textFieldFrame = Self.frame(of: focused)
             let notifications = observeChanges(in: focused)
             // Notifications capture quick edits before Send; polling also covers apps
             // that do not emit Accessibility value-change notifications.
@@ -242,6 +257,13 @@ final class CorrectionWatcher {
             cancel()
             return
         }
+        if value != observedValue { onTextChanged?() }
+        if value != observedValue, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            editedRange = Self.changedWordRange(from: observedValue, to: value)
+            editedWordFrame = editedRange.flatMap { Self.bounds(for: $0, in: element) }
+            observedValue = value
+            textFieldFrame = Self.frame(of: element) ?? textFieldFrame
+        }
         let corrections = session.observe(value)
         self.session = session
         deliver(corrections)
@@ -250,11 +272,81 @@ final class CorrectionWatcher {
 
     private func deliver(_ corrections: [CorrectionLearningSession.Correction]) {
         for correction in corrections {
+            let range = Self.termRange(correction.term, in: observedValue, near: editedRange?.location)
+            let currentValue = element.flatMap(Self.value)
+            let stillPresent = currentValue == observedValue
+            let exactFrame = stillPresent ? range.flatMap { range in element.flatMap { Self.bounds(for: range, in: $0) } } : nil
+            correctionAnchor = exactFrame ?? editedWordFrame
+            correctedWordFrame = stillPresent ? exactFrame ?? editedWordFrame : nil
             onLearn?(correction.term, correction.heardAs)
         }
         if !corrections.isEmpty {
             log.notice("Learned \(corrections.count) dictionary correction(s)")
         }
+    }
+
+    /// Use UTF-16 ranges because Accessibility text ranges use NSString offsets.
+    static func changedWordRange(from old: String, to new: String) -> NSRange? {
+        let a = Array(old.utf16), b = Array(new.utf16)
+        guard !b.isEmpty, a != b else { return nil }
+        var start = 0
+        while start < min(a.count, b.count), a[start] == b[start] { start += 1 }
+        var end = b.count
+        var oldEnd = a.count
+        while end > start, oldEnd > start, b[end - 1] == a[oldEnd - 1] { end -= 1; oldEnd -= 1 }
+        let text = new as NSString
+        let separators = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "'’-_.")).inverted
+        let left = text.rangeOfCharacter(from: separators, options: .backwards,
+                                         range: NSRange(location: 0, length: start))
+        let right = text.rangeOfCharacter(from: separators, options: [],
+                                          range: NSRange(location: end, length: text.length - end))
+        let lower = left.location == NSNotFound ? 0 : NSMaxRange(left)
+        let upper = right.location == NSNotFound ? text.length : right.location
+        guard upper > lower else { return nil }
+        return NSRange(location: lower, length: upper - lower)
+    }
+
+    /// Repeated names are anchored to the occurrence closest to the edit, not the last one.
+    static func termRange(_ term: String, in value: String, near location: Int?) -> NSRange? {
+        let text = value as NSString
+        var search = NSRange(location: 0, length: text.length)
+        var matches: [NSRange] = []
+        while search.length > 0 {
+            let range = text.range(of: term, options: .caseInsensitive, range: search)
+            guard range.location != NSNotFound, range.length > 0 else { break }
+            matches.append(range)
+            search = NSRange(location: NSMaxRange(range), length: text.length - NSMaxRange(range))
+        }
+        guard let location else { return matches.last }
+        return matches.min { abs($0.location - location) < abs($1.location - location) }
+    }
+
+    private static func bounds(for range: NSRange, in element: AXUIElement) -> NSRect? {
+        var cfRange = CFRange(location: range.location, length: range.length)
+        guard let parameter = AXValueCreate(.cfRange, &cfRange) else { return nil }
+        var result: AnyObject?
+        guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString,
+                                                         parameter, &result) == .success,
+              let result, CFGetTypeID(result) == AXValueGetTypeID() else { return nil }
+        var rect = CGRect.zero
+        guard AXValueGetValue(result as! AXValue, .cgRect, &rect), rect.width > 0, rect.height > 0 else { return nil }
+        return screenRect(rect)
+    }
+
+    private static func frame(of element: AXUIElement) -> NSRect? {
+        var position: AnyObject?, size: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
+              let position, let size, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero, dimensions = CGSize.zero
+        guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &dimensions),
+              dimensions.width > 0, dimensions.height > 0 else { return nil }
+        return screenRect(CGRect(origin: point, size: dimensions))
+    }
+
+    private static func screenRect(_ rect: CGRect) -> NSRect {
+        let top = NSScreen.screens.first?.frame.maxY ?? 0
+        return NSRect(x: rect.minX, y: top - rect.maxY, width: rect.width, height: rect.height)
     }
 
     private static func focusedElement() -> AXUIElement? {

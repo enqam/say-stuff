@@ -48,6 +48,13 @@ import AppKit
         assert(normalized.observe("", now: now.addingTimeInterval(0.3)) == [wanted])
 
         assert(CorrectionLearningSession(pasted: "Cerebrus", initialValue: "Something else", now: now) == nil)
+        let repeated = "Cerebras Cerebras"
+        assert(CorrectionWatcher.termRange("Cerebras", in: repeated, near: 0) == NSRange(location: 0, length: 8))
+        assert(CorrectionWatcher.termRange("Cerebras", in: repeated, near: 10) == NSRange(location: 9, length: 8))
+        assert(CorrectionWatcher.changedWordRange(from: "Use Cerebrus now", to: "Use Cerebras now") == NSRange(location: 4, length: 8))
+        assert(CorrectionWatcher.changedWordRange(from: "😀 Cerebrus", to: "😀 Cerebras") == NSRange(location: 3, length: 8))
+        assert(CorrectionWatcher.changedWordRange(from: "Керебрус", to: "Керебрас") == NSRange(location: 0, length: 8))
+        assert(CorrectionWatcher.changedWordRange(from: "same", to: "same") == nil)
         print("PASS: quick send, settled edits, no duplicates, unchanged send, deletion, grammar, unrelated edits, next recording, prefix edits, normalized fields")
     }
 }
