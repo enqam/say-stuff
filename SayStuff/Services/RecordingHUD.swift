@@ -40,6 +40,7 @@ final class RecordingHUD {
     private var pendingPeak: CGFloat = 0
     private var lastFrame: CFTimeInterval = 0
     private var hideWork: DispatchWorkItem?
+    private var messageAction: (() -> Void)?
 
     init() {
         panel = NSPanel(
@@ -108,12 +109,27 @@ final class RecordingHUD {
         pill.addSubview(icon)
 
         layoutWaveform()
+        pill.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked)))
+    }
+
+    @objc private func clicked() {
+        guard mode == .message, let action = messageAction else { return }
+        messageAction = nil
+        action()
+        hide()
+    }
+
+    /// Only clickable messages take the mouse; otherwise clicks pass through to the app below.
+    private func setAction(_ action: (() -> Void)?) {
+        messageAction = action
+        panel.ignoresMouseEvents = action == nil
     }
 
     // MARK: - Public (main thread)
 
     func showRecording() {
         cancelHide()
+        setAction(nil)
         mode = .recording
         smoothed = 0
         pendingPeak = 0
@@ -155,6 +171,7 @@ final class RecordingHUD {
 
     func showProcessing() {
         cancelHide()
+        setAction(nil)
         guard mode != .processing else { return }
         mode = .processing
         setWaveformVisible(true)
@@ -169,8 +186,10 @@ final class RecordingHUD {
         present()
     }
 
-    func flash(_ text: String, symbol: String? = nil, duration: TimeInterval = 1.8) {
+    /// `action` makes the message clickable (e.g. undo).
+    func flash(_ text: String, symbol: String? = nil, duration: TimeInterval = 1.8, action: (() -> Void)? = nil) {
         cancelHide()
+        setAction(action)
         mode = .message
         stopShimmer()
         dot.removeAllAnimations()
@@ -197,6 +216,7 @@ final class RecordingHUD {
 
     func hide() {
         cancelHide()
+        setAction(nil)
         guard mode != .hidden else { return }
         mode = .hidden
         NSAnimationContext.runAnimationGroup({ context in

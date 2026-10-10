@@ -37,6 +37,7 @@ final class DictationController: ObservableObject {
     private let hotkeys = HotkeyManager()
     private let pasteService = PasteService()
     private let sounds = SoundPlayer()
+    private let corrections = CorrectionWatcher()
 
     private var pendingJobs = 0
     private var pasteChain: Task<Void, Never>?
@@ -54,6 +55,9 @@ final class DictationController: ObservableObject {
         }
         hotkeys.onEvent = { [weak self] id, isPress in
             self?.handleHotkey(id, isPress: isPress)
+        }
+        corrections.onLearn = { [weak self] term, heard in
+            self?.learn(term: term, heardAs: heard)
         }
     }
 
@@ -167,6 +171,7 @@ final class DictationController: ObservableObject {
     /// `language` forces one language for this recording (a language shortcut); nil uses the settings.
     func begin(language: String? = nil) {
         guard !isRecording else { return }
+        corrections.cancel()
         recordingLanguage = language
         phase = .recording(since: Date())
 
@@ -326,10 +331,13 @@ final class DictationController: ObservableObject {
                 TranscriptionStore.shared.add(text.trimmingCharacters(in: .whitespaces), source: outcome.source, seconds: latency)
                 if self.pasteService.paste(text) == .copiedOnly {
                     self.notify("Copied — press ⌘V to paste", symbol: "doc.on.clipboard", duration: 2.4)
-                } else if let note = outcome.note {
-                    self.notify(note, symbol: "info.circle", duration: 2.4)
-                } else if self.pendingJobs <= 1, !self.isRecording {
-                    self.hud.hide()
+                } else {
+                    if self.settings.learnCorrections { self.corrections.watch(pasted: text) }
+                    if let note = outcome.note {
+                        self.notify(note, symbol: "info.circle", duration: 2.4)
+                    } else if self.pendingJobs <= 1, !self.isRecording {
+                        self.hud.hide()
+                    }
                 }
                 self.playDoneSound()
             } catch {
@@ -456,6 +464,17 @@ final class DictationController: ObservableObject {
         let wait = max(0, VolumeAttenuator.fadeUpDuration + 0.02 - elapsed)
         DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
             self?.sounds.play(SoundPlayer.done)
+        }
+    }
+
+    private func learn(term: String, heardAs heard: String) {
+        let dictionary = DictionaryStore.shared
+        let existed = dictionary.entries.contains { $0.term.caseInsensitiveCompare(term) == .orderedSame }
+        dictionary.add(term: term, heardAs: [heard], learned: true)
+        print("[Dictation] Learned \(term) (heard \(heard))")
+        guard !isRecording else { return }
+        hud.flash("Learned \(term) · click to undo", symbol: "character.book.closed", duration: 4) {
+            dictionary.forget(term: term, heardAs: heard, removeTerm: !existed)
         }
     }
 

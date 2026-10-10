@@ -2,6 +2,7 @@ import SwiftUI
 
 struct DictionaryPane: View {
     @ObservedObject private var store = DictionaryStore.shared
+    @ObservedObject private var settingsManager = SettingsManager.shared
     @State private var term = ""
     @State private var heardAs = ""
 
@@ -17,6 +18,14 @@ struct DictionaryPane: View {
                     Button("Add", action: add)
                         .buttonStyle(PillButtonStyle(prominent: true))
                         .disabled(term.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+
+            Card {
+                CardRow(title: "Learn from my corrections",
+                        detail: "When you fix a misheard name or term right after it's pasted, SayStuff adds it here.",
+                        showsDivider: false) {
+                    Switch(isOn: $settingsManager.settings.learnCorrections)
                 }
             }
 

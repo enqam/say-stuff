@@ -40,6 +40,7 @@
 		B1000011 /* MenuPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000011 /* MenuPanel.swift */; };
 		B1000012 /* CloudServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000012 /* CloudServices.swift */; };
 		B1000013 /* Telemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000013 /* Telemetry.swift */; };
+		B1000014 /* CorrectionWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000014 /* CorrectionWatcher.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -78,6 +79,7 @@
 		B2000011 /* MenuPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuPanel.swift; sourceTree = "<group>"; };
 		B2000012 /* CloudServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudServices.swift; sourceTree = "<group>"; };
 		B2000013 /* Telemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Telemetry.swift; sourceTree = "<group>"; };
+		B2000014 /* CorrectionWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorrectionWatcher.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -143,6 +145,7 @@
 		A5000005 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				B2000014 /* CorrectionWatcher.swift */,
 				B2000012 /* CloudServices.swift */,
 				B2000004 /* RecordingHUD.swift */,
 				B2000003 /* DictationController.swift */,
@@ -275,6 +278,7 @@
 				B1000011 /* MenuPanel.swift in Sources */,
 				B1000012 /* CloudServices.swift in Sources */,
 				B1000013 /* Telemetry.swift in Sources */,
+				B1000014 /* CorrectionWatcher.swift in Sources */,
 				A1000001 /* SayStuffApp.swift in Sources */,
 				A1000002 /* AppDelegate.swift in Sources */,
 				A1000003 /* MenuBarView.swift in Sources */,

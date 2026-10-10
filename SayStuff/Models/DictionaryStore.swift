@@ -46,6 +46,16 @@ final class DictionaryStore: ObservableObject {
         }
     }
 
+    /// Undoes a learned correction: drops the variant, and the word too if it was new.
+    func forget(term: String, heardAs heard: String, removeTerm: Bool) {
+        guard let index = entries.firstIndex(where: { $0.term.caseInsensitiveCompare(term) == .orderedSame }) else { return }
+        if removeTerm {
+            entries.remove(at: index)
+        } else {
+            entries[index].heardAs.removeAll { $0.caseInsensitiveCompare(heard) == .orderedSame }
+        }
+    }
+
     func remove(_ id: DictionaryEntry.ID) {
         entries.removeAll { $0.id == id }
     }
