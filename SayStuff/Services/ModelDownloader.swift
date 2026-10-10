@@ -11,6 +11,7 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
 
     private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
     private var tasks: [Int: (task: URLSessionDownloadTask, model: WhisperModel)] = [:]
+    private var parakeetTask: Task<Void, Never>?
 
     func isDownloading(_ model: WhisperModel) -> Bool {
         progress[model] != nil
@@ -24,12 +25,42 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
         }
         errors[model] = nil
         progress[model] = 0
+        guard model.isWhisper else {
+            downloadParakeet()
+            return
+        }
         let task = session.downloadTask(with: model.downloadURL)
         tasks[task.taskIdentifier] = (task, model)
         task.resume()
     }
 
+    /// Parakeet comes from FluidAudio's model hub (several CoreML files), not a single URL.
+    private func downloadParakeet() {
+        parakeetTask = Task { @MainActor in
+            let downloader = ModelDownloader.shared
+            do {
+                try await ParakeetService.download { fraction in
+                    DispatchQueue.main.async {
+                        if downloader.progress[.parakeet] != nil { downloader.progress[.parakeet] = fraction }
+                    }
+                }
+                downloader.progress[.parakeet] = nil
+                let settings = SettingsManager.shared
+                if !settings.isModelDownloaded(settings.settings.modelSize) { settings.settings.modelSize = .parakeet }
+                downloader.completedCount += 1
+            } catch {
+                downloader.progress[.parakeet] = nil
+                if !Task.isCancelled { downloader.errors[.parakeet] = error.localizedDescription }
+            }
+        }
+    }
+
     func cancel(_ model: WhisperModel) {
+        if model == .parakeet {
+            parakeetTask?.cancel()
+            progress[.parakeet] = nil
+            return
+        }
         guard let entry = tasks.first(where: { $0.value.model == model }) else { return }
         entry.value.task.cancel()
         tasks[entry.key] = nil

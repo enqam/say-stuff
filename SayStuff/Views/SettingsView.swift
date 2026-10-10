@@ -167,7 +167,7 @@ struct GeneralPane: View {
                     }
                     CardRow(title: "Open at login", showsDivider: false) {
                         Switch(isOn: $launchAtLogin)
-                            .onChange(of: launchAtLogin) { enabled in
+                            .onChange(of: launchAtLogin) { _, enabled in
                                 do {
                                     if enabled { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
                                 } catch {

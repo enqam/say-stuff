@@ -86,14 +86,18 @@ final class DictationController: ObservableObject {
     private func updateLocalServer() {
         let model = settingsManager.modelPath
         let idle = settings.modelIdleMinutes * 60
-        let usesLocal = settings.engine == .local
+        let usesWhisper = settings.engine == .local && settings.modelSize.isWhisper
+        let usesParakeet = settings.engine == .local && settings.modelSize == .parakeet
         Task {
             await WhisperServer.shared.setIdleTimeout(idle)
-            if usesLocal {
+            await ParakeetService.shared.setIdleTimeout(idle)
+            // Only the selected local model stays in memory; others load again on demand.
+            if usesWhisper {
                 await WhisperServer.shared.stopUnless(model: model)
             } else {
-                await WhisperServer.shared.stop()  // started again on demand if the cloud falls back
+                await WhisperServer.shared.stop()
             }
+            if !usesParakeet { await ParakeetService.shared.unload() }
         }
     }
 
@@ -185,8 +189,12 @@ final class DictationController: ObservableObject {
         warmUpConnections()
         if settings.engine == .local {
             // Load the model while the user talks; usually ready before they stop.
-            let cli = settingsManager.whisperBinaryPath, model = settingsManager.modelPath
-            Task.detached(priority: .userInitiated) { await WhisperServer.shared.prewarm(cliPath: cli, model: model) }
+            if settings.modelSize == .parakeet {
+                Task.detached(priority: .userInitiated) { await ParakeetService.shared.prewarm() }
+            } else {
+                let cli = settingsManager.whisperBinaryPath, model = settingsManager.modelPath
+                Task.detached(priority: .userInitiated) { await WhisperServer.shared.prewarm(cliPath: cli, model: model) }
+            }
         }
 
         autoStopTimer?.invalidate()
@@ -366,6 +374,13 @@ final class DictationController: ObservableObject {
         let transcribeStart = Date()
 
         func transcribeLocally() async throws -> String {
+            if job.localModel == .parakeet {
+                defer { try? FileManager.default.removeItem(at: job.recording.url) }
+                let forced = job.candidates.count == 1 ? job.candidates[0] : nil
+                let result = try await ParakeetService.shared.transcribe(job.recording.url, forcedLanguage: forced)
+                metric.coldStart = result.coldStart
+                return WhisperService.clean(result.text)
+            }
             let result = try await WhisperService().transcribe(job.local)
             metric.coldStart = result.coldStart
             metric.retriedLanguage = result.retriedLanguage

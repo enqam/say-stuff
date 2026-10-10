@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		121CD9202F47D7170035408B /* VolumeAttenuator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 121CD91F2F47D7170035408B /* VolumeAttenuator.swift */; };
 		1238F6F52F255C88006BF7BD /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 1238F6F42F255C88006BF7BD /* Sparkle */; };
+		C1000001 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C3000001 /* FluidAudio */; };
 		12D6DFFF2F2E3D9D00D0FBDA /* ScreenBorderOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12D6DFFE2F2E3D9D00D0FBDA /* ScreenBorderOverlay.swift */; };
 		12E688CA2F26D91B00DBCAB4 /* TranscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E688C92F26D91B00DBCAB4 /* TranscriptionStore.swift */; };
 		12E688CC2F26D92600DBCAB4 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E688CB2F26D92600DBCAB4 /* HistoryView.swift */; };
@@ -41,6 +42,7 @@
 		B1000012 /* CloudServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000012 /* CloudServices.swift */; };
 		B1000013 /* Telemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000013 /* Telemetry.swift */; };
 		B1000014 /* CorrectionWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000014 /* CorrectionWatcher.swift */; };
+		B1000015 /* ParakeetService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000015 /* ParakeetService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -80,6 +82,7 @@
 		B2000012 /* CloudServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudServices.swift; sourceTree = "<group>"; };
 		B2000013 /* Telemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Telemetry.swift; sourceTree = "<group>"; };
 		B2000014 /* CorrectionWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CorrectionWatcher.swift; sourceTree = "<group>"; };
+		B2000015 /* ParakeetService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ParakeetService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -88,6 +91,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				1238F6F52F255C88006BF7BD /* Sparkle in Frameworks */,
+				C1000001 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -145,6 +149,7 @@
 		A5000005 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				B2000015 /* ParakeetService.swift */,
 				B2000014 /* CorrectionWatcher.swift */,
 				B2000012 /* CloudServices.swift */,
 				B2000004 /* RecordingHUD.swift */,
@@ -238,6 +243,7 @@
 			mainGroup = A5000001;
 			packageReferences = (
 				1238F6F32F255C88006BF7BD /* XCRemoteSwiftPackageReference "Sparkle" */,
+				C2000001 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 			);
 			productRefGroup = A5000007 /* Products */;
 			projectDirPath = "";
@@ -279,6 +285,7 @@
 				B1000012 /* CloudServices.swift in Sources */,
 				B1000013 /* Telemetry.swift in Sources */,
 				B1000014 /* CorrectionWatcher.swift in Sources */,
+				B1000015 /* ParakeetService.swift in Sources */,
 				A1000001 /* SayStuffApp.swift in Sources */,
 				A1000002 /* AppDelegate.swift in Sources */,
 				A1000003 /* MenuBarView.swift in Sources */,
@@ -355,7 +362,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -412,7 +419,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = macosx;
@@ -508,6 +515,14 @@
 				minimumVersion = 2.8.1;
 			};
 		};
+		C2000001 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 0.17.7;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -515,6 +530,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 1238F6F32F255C88006BF7BD /* XCRemoteSwiftPackageReference "Sparkle" */;
 			productName = Sparkle;
+		};
+		C3000001 /* FluidAudio */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C2000001 /* XCRemoteSwiftPackageReference "FluidAudio" */;
+			productName = FluidAudio;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

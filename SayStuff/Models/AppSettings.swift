@@ -337,6 +337,7 @@ final class SettingsManager: ObservableObject {
     }
 
     func isModelDownloaded(_ model: WhisperModel) -> Bool {
-        FileManager.default.fileExists(atPath: modelURL(for: model).path)
+        guard model.isWhisper else { return ParakeetService.isDownloaded }
+        return FileManager.default.fileExists(atPath: modelURL(for: model).path)
     }
 }
