@@ -14,10 +14,11 @@ final class MenuPanel {
     private var clickMonitor: Any?
     private var keyMonitor: Any?
     private weak var anchor: NSStatusBarButton?
+    private let makeContent: (@escaping (CGFloat) -> Void, CGFloat) -> AnyView
 
     var isShown: Bool { panel.isVisible }
 
-    init<Content: View>(@ViewBuilder content: (_ resize: @escaping (CGFloat) -> Void) -> Content) {
+    init<Content: View>(@ViewBuilder content: @escaping (_ resize: @escaping (CGFloat) -> Void, _ maximumHeight: CGFloat) -> Content) {
         panel = Panel(contentRect: NSRect(x: 0, y: 0, width: MenuBarView.width, height: 400),
                       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.isOpaque = false
@@ -29,11 +30,10 @@ final class MenuPanel {
         panel.animationBehavior = .none
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
 
-        var resize: (CGFloat) -> Void = { _ in }
+        makeContent = { resize, maximumHeight in AnyView(content(resize, maximumHeight)) }
         host = NSHostingView(rootView: AnyView(EmptyView()))
-        host.rootView = AnyView(content({ resize($0) }))
         panel.contentView = host
-        resize = { [weak self] height in self?.setHeight(height) }
+        host.rootView = makeContent({ [weak self] height in self?.setHeight(height) }, 720)
     }
 
     func toggle(from button: NSStatusBarButton) {
@@ -42,6 +42,8 @@ final class MenuPanel {
 
     func show(from button: NSStatusBarButton) {
         anchor = button
+        let availableHeight = max(160, (button.window?.screen?.visibleFrame.height ?? 800) - 14)
+        host.rootView = makeContent({ [weak self] height in self?.setHeight(height) }, availableHeight)
         let size = host.fittingSize
         panel.setContentSize(NSSize(width: MenuBarView.width, height: size.height))
         position()

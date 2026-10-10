@@ -34,6 +34,10 @@ final class APIKeys: ObservableObject {
     private let service = "com.saystuff.app.api-keys"
 
     private init() {
+        #if DEBUG
+        // UI snapshots need neither credentials nor Keychain permission prompts.
+        guard !UISnapshotMode.isActive else { return }
+        #endif
         for provider in Provider.allCases {
             keys[provider] = Self.read(service: service, account: provider.rawValue)
         }

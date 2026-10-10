@@ -3,6 +3,11 @@ import SwiftUI
 /// The menu bar panel. Everything here is one click: profile, engine, language, copy a recent result.
 struct MenuBarView: View {
     var onHeightChange: (CGFloat) -> Void = { _ in }
+    var maximumHeight: CGFloat = 720
+    var initiallyShowsPreview = false
+    #if DEBUG
+    var snapshot: MenuSnapshotFixture? = nil
+    #endif
 
     @ObservedObject private var dictation = DictationController.shared
     @ObservedObject private var settingsManager = SettingsManager.shared
@@ -15,49 +20,67 @@ struct MenuBarView: View {
     @State private var hoveredProfileID: UUID??
     @State private var copiedID: UUID?
     @State private var hasAccessibility = AXIsProcessTrusted()
+    @State private var showsPreview = false
+    @State private var contentHeight: CGFloat = 400
 
-    private var settings: AppSettings { settingsManager.settings }
-    static let width: CGFloat = 320
+    private var settings: AppSettings {
+        #if DEBUG
+        if let snapshot { return snapshot.settings }
+        #endif
+        return settingsManager.settings
+    }
+
+    private var inputDevices: [AudioDevice] {
+        #if DEBUG
+        if let snapshot { return snapshot.devices }
+        #endif
+        return devices.inputDevices
+    }
+
+    private var recentTranscriptions: [RecentTranscription] {
+        #if DEBUG
+        if let snapshot { return snapshot.recent }
+        #endif
+        return history.transcriptions
+    }
+    static let width: CGFloat = 360
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(spacing: 0) {
             header
-                .padding(.horizontal, 14)
-                .padding(.top, 14)
-                .padding(.bottom, 12)
-
-            if !hasAccessibility {
-                accessibilityBanner
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 10)
-            }
-
-            profiles
-                .padding(.horizontal, 10)
-                .padding(.bottom, 10)
-
+                .padding(.horizontal, 16)
+                .frame(height: 64)
             separator
-            models
-                .padding(.horizontal, 14)
-                .padding(.top, 9)
-            languages
-                .padding(.horizontal, 14)
-                .padding(.top, 9)
-            microphones
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
 
-            if !history.transcriptions.isEmpty {
-                separator
-                recent
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 6)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if !hasAccessibility { accessibilityBanner }
+                    profiles
+                    separator
+                    models
+                    languages
+                    microphones
+                    if !recentTranscriptions.isEmpty {
+                        separator
+                        recent
+                    }
+                }
+                .padding(14)
+                .frame(width: Self.width, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(GeometryReader { proxy in
+                    Color.clear.preference(key: ContentHeightKey.self, value: proxy.size.height)
+                })
+            }
+            .frame(height: min(contentHeight, max(1, maximumHeight - 120)))
+            .onPreferenceChange(ContentHeightKey.self) { height in
+                if height > 0 { contentHeight = height }
             }
 
             separator
             footer
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
+                .padding(.horizontal, 12)
+                .frame(height: 54)
         }
         .frame(width: Self.width)
         .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
@@ -65,7 +88,13 @@ struct MenuBarView: View {
             Color.clear.preference(key: HeightKey.self, value: proxy.size.height)
         })
         .onPreferenceChange(HeightKey.self, perform: onHeightChange)
-        .onAppear { hasAccessibility = AXIsProcessTrusted() }
+        .onAppear {
+            hasAccessibility = AXIsProcessTrusted()
+            #if DEBUG
+            if snapshot != nil { hasAccessibility = true }
+            #endif
+            showsPreview = initiallyShowsPreview
+        }
     }
 
     private var separator: some View {
@@ -90,7 +119,8 @@ struct MenuBarView: View {
                 status
             }
             Spacer()
-            EngineSwitch()
+            EngineSwitch(engine: settings.engine)
+                .fixedSize()
         }
     }
 
@@ -120,6 +150,8 @@ struct MenuBarView: View {
             }
         }
         .font(.mono(11.5))
+        .lineLimit(1)
+        .truncationMode(.tail)
         .foregroundStyle(Theme.textSecondary)
     }
 
@@ -147,16 +179,36 @@ struct MenuBarView: View {
     // MARK: Profiles
 
     private var profileChoices: [Profile?] {
-        [nil] + profileStore.profiles.map { Optional($0) }
+        #if DEBUG
+        if let snapshot { return [nil] + snapshot.profiles.map { Optional($0) } }
+        #endif
+        return [nil] + profileStore.profiles.map { Optional($0) }
     }
 
     private var previewProfile: Profile? {
-        if let hovered = hoveredProfileID { return profileStore.profile(id: hovered) }
-        return profileStore.profile(id: settings.activeProfileID)
+        let id: UUID?
+        if let hovered = hoveredProfileID { id = hovered } else { id = settings.activeProfileID }
+        return profileChoices.compactMap { $0 }.first { $0.id == id }
     }
 
     private var profiles: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Eyebrow("Output")
+                Spacer()
+                Button {
+                    showsPreview.toggle()
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Preview")
+                        Image(systemName: showsPreview ? "chevron.up" : "chevron.down")
+                    }
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(showsPreview ? "Hide output preview" : "Show output preview")
+            }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
                 ForEach(profileChoices, id: \.?.id) { profile in
                     ProfileTile(profile: profile, isSelected: settings.activeProfileID == profile?.id) {
@@ -172,9 +224,15 @@ struct MenuBarView: View {
                 }
             }
 
-            ProfilePreview(profile: previewProfile, compact: true)
-                .frame(height: 124, alignment: .top)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Text(previewProfile?.summary ?? "As spoken, without rewriting")
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.textSecondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if showsPreview {
+                ProfilePreview(profile: previewProfile, compact: true)
+            }
 
             if previewProfile != nil, !keys.hasKey(.groq) {
                 Button {
@@ -195,36 +253,58 @@ struct MenuBarView: View {
     @ObservedObject private var downloader = ModelDownloader.shared
 
     private var downloadedModels: [WhisperModel] {
+        #if DEBUG
+        if let snapshot { return snapshot.models }
+        #endif
         _ = downloader.completedCount
         return WhisperModel.allCases.filter { settingsManager.isModelDownloaded($0) }
     }
 
-    @ViewBuilder
     private var models: some View {
-        HStack(spacing: 5) {
-            Image(systemName: settings.engine == .local ? "cpu" : "cloud")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.textTertiary)
-                .frame(width: 16)
-                .padding(.trailing, 3)
-            if settings.engine == .local {
-                ForEach(downloadedModels, id: \.self) { model in
-                    Chip(title: model.shortName, isSelected: settings.modelSize == model) {
-                        settingsManager.settings.modelSize = model
-                    }
-                }
-            } else {
-                ForEach(CloudProvider.allCases, id: \.self) { provider in
-                    Chip(title: provider == .groq ? "Groq" : "fal.ai", isSelected: settings.cloudProvider == provider) {
-                        settingsManager.settings.cloudProvider = provider
-                        if !keys.hasKey(provider.keyProvider) { AppDelegate.shared.openSettings(.cloud) }
-                    }
-                }
-            }
-            Spacer()
-            IconButton(symbol: "ellipsis", help: settings.engine == .local ? "Download models" : "Cloud keys") {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeading(settings.engine == .local ? "Local model" : "Cloud provider",
+                           action: settings.engine == .local ? "Manage" : "API keys") {
                 AppDelegate.shared.openSettings(settings.engine == .local ? .speech : .cloud)
             }
+            if settings.engine == .local {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+                    ForEach(downloadedModels, id: \.self) { model in
+                        MenuChoice(title: model.shortName, isSelected: settings.modelSize == model) {
+                            settingsManager.settings.modelSize = model
+                        }
+                        .help(model.displayName + " · " + model.description)
+                    }
+                }
+                if downloadedModels.isEmpty {
+                    Button("Download a model…") { AppDelegate.shared.openSettings(.speech) }
+                        .buttonStyle(PillButtonStyle())
+                } else if !downloadedModels.contains(settings.modelSize) {
+                    Text("\(settings.modelSize.shortName) is not downloaded. Choose an installed model or open Manage.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 2), spacing: 6) {
+                    ForEach(CloudProvider.allCases, id: \.self) { provider in
+                        MenuChoice(title: provider == .groq ? "Groq" : "fal.ai", isSelected: settings.cloudProvider == provider) {
+                            settingsManager.settings.cloudProvider = provider
+                            if !keys.hasKey(provider.keyProvider) { AppDelegate.shared.openSettings(.cloud) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func sectionHeading(_ title: String, action: String, perform: @escaping () -> Void) -> some View {
+        HStack {
+            Eyebrow(title)
+            Spacer()
+            Button(action, action: perform)
+                .buttonStyle(.plain)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.textSecondary)
         }
     }
 
@@ -233,23 +313,27 @@ struct MenuBarView: View {
     @ObservedObject private var devices = AudioDeviceManager.shared
 
     private var microphones: some View {
-        HStack(alignment: .top, spacing: 5) {
-            Image(systemName: "mic")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.textTertiary)
-                .frame(width: 16, height: 24)
-                .padding(.trailing, 3)
-            FlowLayout(spacing: 5) {
-                    Chip(title: "Default", isSelected: settings.selectedAudioDeviceUID == nil) {
-                        settingsManager.settings.selectedAudioDeviceUID = nil
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeading("Microphone", action: "Refresh") { devices.refreshDevices() }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 2), spacing: 6) {
+                MenuChoice(title: "System default", isSelected: settings.selectedAudioDeviceUID == nil) {
+                    settingsManager.settings.selectedAudioDeviceUID = nil
+                }
+                .help("Follows the system input device")
+                ForEach(inputDevices) { device in
+                    MenuChoice(title: device.shortName, isSelected: settings.selectedAudioDeviceUID == device.uid) {
+                        settingsManager.settings.selectedAudioDeviceUID = device.uid
                     }
-                    .help("Follows the system input device")
-                    ForEach(devices.inputDevices) { device in
-                        Chip(title: device.shortName, isSelected: settings.selectedAudioDeviceUID == device.uid) {
-                            settingsManager.settings.selectedAudioDeviceUID = device.uid
-                        }
-                        .help(device.name)
-                    }
+                    .help(device.name)
+                    .accessibilityLabel(device.name)
+                }
+            }
+            if let selectedUID = settings.selectedAudioDeviceUID,
+               !inputDevices.contains(where: { $0.uid == selectedUID }) {
+                Text("Selected microphone is disconnected. Choose another input.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -263,20 +347,16 @@ struct MenuBarView: View {
     }
 
     private var languages: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "globe")
-                .font(.system(size: 12))
-                .foregroundStyle(Theme.textTertiary)
-                .frame(width: 16)
-                .padding(.trailing, 3)
-            ForEach(languageChoices, id: \.self) { code in
-                Chip(title: code == "auto" ? "Auto" : code.uppercased(), isSelected: settings.language == code) {
-                    settingsManager.settings.language = code
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeading("Language", action: "Manage") { AppDelegate.shared.openSettings(.speech) }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 5), spacing: 6) {
+                ForEach(languageChoices, id: \.self) { code in
+                    MenuChoice(title: code == "auto" ? "Auto" : code.uppercased(),
+                               isSelected: settings.language == code, showsCheckmark: false) {
+                        settingsManager.settings.language = code
+                    }
+                    .accessibilityLabel(allSupportedLanguages.first { $0.code == code }?.name ?? code)
                 }
-            }
-            Spacer()
-            IconButton(symbol: "ellipsis", help: "All languages") {
-                AppDelegate.shared.openSettings(.speech)
             }
         }
     }
@@ -297,7 +377,7 @@ struct MenuBarView: View {
             .padding(.top, 2)
             .padding(.bottom, 3)
 
-            ForEach(history.transcriptions.prefix(3)) { item in
+            ForEach(recentTranscriptions.prefix(3)) { item in
                 Button {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(item.text, forType: .string)
@@ -310,7 +390,8 @@ struct MenuBarView: View {
                         Text(item.text)
                             .font(.system(size: 12.5))
                             .foregroundStyle(Theme.text)
-                            .lineLimit(2)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                             .multilineTextAlignment(.leading)
                         Spacer(minLength: 4)
                         Text(copiedID == item.id ? "Copied" : item.date.shortRelative)
@@ -341,9 +422,16 @@ struct MenuBarView: View {
             Button {
                 AppDelegate.shared.openSettings(.cloud)
             } label: {
-                Text(spendLine)
-                    .font(.mono(11.5))
-                    .foregroundStyle(Theme.textTertiary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ledger.records.isEmpty ? "No cloud spend yet" : "\(monthCost.usdString) this month")
+                    if let projected = ledger.projectedMonthlyCost {
+                        Text("≈\(projected.usdString) / month")
+                    }
+                }
+                .font(.mono(11))
+                .lineLimit(1)
+                .foregroundStyle(Theme.textSecondary)
+                .help(spendLine)
             }
             .buttonStyle(.plain)
             .padding(.leading, 6)
@@ -358,10 +446,53 @@ struct MenuBarView: View {
 
 private struct HeightKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
-/// Icon over name. The selected tile takes the accent.
+private struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+/// Equal-width choices constrain long names instead of letting intrinsic widths stretch the panel.
+private struct MenuChoice: View {
+    let title: String
+    let isSelected: Bool
+    var showsCheckmark = true
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Text(title)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if showsCheckmark {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .semibold))
+                        .opacity(isSelected ? 1 : 0)
+                }
+            }
+            .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+            .foregroundStyle(isSelected ? Theme.accent : Theme.textSecondary)
+            .padding(.horizontal, 9)
+            .frame(height: 32)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(isSelected ? Theme.accentSoft : (isHovering ? Theme.raised : Theme.surface)))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(isSelected ? Theme.accent.opacity(0.3) : Color.clear))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .help(title)
+    }
+}
+
+/// Compact output choice. The selected tile takes the accent.
 private struct ProfileTile: View {
     let profile: Profile?
     let isSelected: Bool
@@ -370,7 +501,7 @@ private struct ProfileTile: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
                 Image(systemName: profile?.symbol ?? "text.alignleft")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(isSelected ? Theme.accent : Theme.textSecondary)
@@ -380,8 +511,8 @@ private struct ProfileTile: View {
                     .lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 11)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 8)
+            .frame(height: 36)
             .background(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(isSelected ? Theme.accentSoft : (isHovering ? Theme.raised : Theme.surface))
@@ -390,6 +521,8 @@ private struct ProfileTile: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .help(profile?.name ?? "Raw")
         .animation(.easeOut(duration: 0.12), value: isSelected)
         .animation(.easeOut(duration: 0.1), value: isHovering)
     }
@@ -397,6 +530,7 @@ private struct ProfileTile: View {
 
 /// Local | Cloud in one click. Cloud without a key jumps to where you add one.
 struct EngineSwitch: View {
+    var engine: TranscriptionEngine? = nil
     @ObservedObject private var settingsManager = SettingsManager.shared
     @ObservedObject private var keys = APIKeys.shared
     @Namespace private var selection
@@ -411,7 +545,7 @@ struct EngineSwitch: View {
     }
 
     private func segment(_ engine: TranscriptionEngine, title: String) -> some View {
-        let isSelected = settingsManager.settings.engine == engine
+        let isSelected = (self.engine ?? settingsManager.settings.engine) == engine
         return Button {
             withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
                 settingsManager.settings.engine = engine

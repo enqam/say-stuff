@@ -7,6 +7,23 @@ enum UISnapshotMode {
 
 #if DEBUG
 
+/// Read-only fixtures exercise the overflow cases without changing the user's saved settings or history.
+struct MenuSnapshotFixture {
+    var settings = AppSettings()
+    var profiles = Profile.builtIns
+    var models = WhisperModel.allCases
+    var devices = [
+        AudioDevice(id: 1, name: "iPhone Microphone", uid: "snapshot-iphone"),
+        AudioDevice(id: 2, name: "Comica_VM40 TX", uid: "snapshot-comica"),
+        AudioDevice(id: 3, name: "MacBook Pro Microphone", uid: "snapshot-mac"),
+    ]
+    var recent = [
+        RecentTranscription(text: "First, fix the login page, then add dark mode and update the changelog."),
+        RecentTranscription(text: "The meeting has moved to Thursday at three."),
+        RecentTranscription(text: "Cerebras is in the dictionary now."),
+    ]
+}
+
 /// Renders every UI surface to PNGs (light + dark) and quits, for design review.
 /// Doesn't register hotkeys or a status item, so it can run next to a live copy.
 ///
@@ -27,7 +44,32 @@ enum UISnapshots {
         UISnapshotMode.isActive = true
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        var jobs: [Job] = [Job(name: "popover", size: nil) { AnyView(MenuBarView()) }]
+        var local = MenuSnapshotFixture()
+        local.settings.language = "en"
+        local.settings.modelSize = .parakeet
+        local.settings.selectedAudioDeviceUID = "snapshot-comica"
+        var cloud = local
+        cloud.settings.engine = .cloud
+        var preview = local
+        preview.settings.activeProfileID = Profile.promptID
+        var stress = local
+        stress.settings.spokenLanguages = allSupportedLanguages.filter { $0.code != "auto" }.map(\.code)
+        stress.profiles += (0..<7).map { index in
+            var profile = Profile.newCustom()
+            profile.name = "A very long custom profile name \(index + 1)"
+            return profile
+        }
+        stress.devices += (0..<8).map { index in
+            AudioDevice(id: UInt32(index + 10), name: "An exceptionally long external microphone device name \(index + 1)", uid: "snapshot-long-\(index)")
+        }
+        var jobs: [Job] = [
+            Job(name: "popover", size: nil) { AnyView(MenuBarView()) },
+            Job(name: "menu-local", size: nil) { AnyView(MenuBarView(snapshot: local)) },
+            Job(name: "menu-cloud", size: nil) { AnyView(MenuBarView(snapshot: cloud)) },
+            Job(name: "menu-preview", size: nil) { AnyView(MenuBarView(initiallyShowsPreview: true, snapshot: preview)) },
+            Job(name: "menu-long-names", size: nil) { AnyView(MenuBarView(maximumHeight: 1600, snapshot: stress)) },
+            Job(name: "menu-overflow", size: nil) { AnyView(MenuBarView(maximumHeight: 500, snapshot: stress)) },
+        ]
         for pane in SettingsPane.allCases {
             jobs.append(Job(name: "settings-\(pane.rawValue)", size: NSSize(width: 640, height: 900)) {
                 SettingsRouter.shared.pane = pane
@@ -66,6 +108,8 @@ enum UISnapshots {
 
         // Give SwiftUI a few run loop turns to lay out (NavigationSplitView needs more than one).
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            host.layoutSubtreeIfNeeded()
+            if job.size == nil { window.setContentSize(host.fittingSize) }
             host.layoutSubtreeIfNeeded()
             let suffix = appearanceName == .darkAqua ? "dark" : "light"
             write(host, to: directory.appendingPathComponent("\(job.name)-\(suffix).png"), appearance: appearance)

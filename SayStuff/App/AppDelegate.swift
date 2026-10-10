@@ -60,7 +60,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
-        menuPanel = MenuPanel { resize in MenuBarView(onHeightChange: resize) }
+        menuPanel = MenuPanel { resize, maximumHeight in
+            MenuBarView(onHeightChange: resize, maximumHeight: maximumHeight)
+        }
     }
 
     private func updateStatusIcon(for phase: DictationController.Phase) {
