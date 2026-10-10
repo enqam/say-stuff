@@ -1,6 +1,11 @@
-#if DEBUG
 import AppKit
 import SwiftUI
+
+enum UISnapshotMode {
+    static var isActive = false
+}
+
+#if DEBUG
 
 /// Renders every UI surface to PNGs (light + dark) and quits, for design review.
 /// Doesn't register hotkeys or a status item, so it can run next to a live copy.
@@ -19,6 +24,7 @@ enum UISnapshots {
     }
 
     static func run(to directory: URL) {
+        UISnapshotMode.isActive = true
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
         var jobs: [Job] = [Job(name: "popover", size: nil) { AnyView(MenuBarView()) }]

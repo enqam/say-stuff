@@ -97,6 +97,12 @@ final class APIKeys: ObservableObject {
     }
 }
 
+struct FalBilledFailure: LocalizedError {
+    let message: String
+    let requestSeconds: Double
+    var errorDescription: String? { message }
+}
+
 enum CloudError: LocalizedError {
     case missingKey(APIKeys.Provider)
     case invalidKey(APIKeys.Provider)
@@ -122,6 +128,7 @@ enum CloudSession {
 
     /// Opens the TLS connection ahead of the real request (called when recording starts).
     static func preconnect(_ url: URL) {
+        // HEAD to the host root; the response doesn't matter, the warm connection does.
         var request = URLRequest(url: url)
         request.httpMethod = "HEAD"
         request.timeoutInterval = 5
@@ -145,16 +152,21 @@ enum CloudSession {
 
 struct FalTranscriber {
     static let endpoint = URL(string: "https://fal.run/fal-ai/wizper")!
+    static let storageEndpoint = URL(string: "https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3")!
 
     struct Result {
         let text: String
+        /// Wall time of the transcription call only (not the upload).
         let requestSeconds: Double
     }
 
     func transcribe(audioURL: URL, language: String, key: String) async throws -> Result {
-        let audio = try Data(contentsOf: audioURL)
+        // Wizper rejects data: URLs, so the audio goes to fal storage first (same flow as fal's
+        // own client), set to expire a few minutes later.
+        let fileURL = try await upload(try Data(contentsOf: audioURL), key: key)
+
         var body: [String: Any] = [
-            "audio_url": "data:audio/wav;base64," + audio.base64EncodedString(),
+            "audio_url": fileURL,
             "task": "transcribe",
             "chunk_level": "segment",
             "version": "3",
@@ -170,11 +182,52 @@ struct FalTranscriber {
 
         let start = Date()
         let (data, response) = try await CloudSession.shared.data(for: request)
-        try CloudSession.check(response, data: data, provider: .fal)
+        #if DEBUG
+        if let http = response as? HTTPURLResponse {
+            print("[fal.ai] HTTP \(http.statusCode) headers: \(http.allHeaderFields.filter { "\($0.key)".lowercased().contains("fal") })")
+        }
+        #endif
+        do {
+            try CloudSession.check(response, data: data, provider: .fal)
+        } catch CloudError.server(let message) {
+            // The model ran (and fal bills it) even though the request failed.
+            throw FalBilledFailure(message: message, requestSeconds: Date().timeIntervalSince(start))
+        }
 
         struct Output: Decodable { let text: String }
         let output = try JSONDecoder().decode(Output.self, from: data)
         return Result(text: output.text, requestSeconds: Date().timeIntervalSince(start))
+    }
+
+    private func upload(_ audio: Data, key: String) async throws -> String {
+        var initiate = URLRequest(url: Self.storageEndpoint)
+        initiate.httpMethod = "POST"
+        initiate.setValue("Key \(key)", forHTTPHeaderField: "Authorization")
+        initiate.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        initiate.setValue(#"{"expiration_duration_seconds":300}"#, forHTTPHeaderField: "X-Fal-Object-Lifecycle")
+        initiate.httpBody = try JSONSerialization.data(withJSONObject: [
+            "content_type": "audio/wav",
+            "file_name": "dictation-\(UUID().uuidString).wav",
+        ])
+        let (data, response) = try await CloudSession.shared.data(for: initiate)
+        try CloudSession.check(response, data: data, provider: .fal)
+
+        struct Target: Decodable {
+            let upload_url: String
+            let file_url: String
+        }
+        let target = try JSONDecoder().decode(Target.self, from: data)
+        guard let uploadURL = URL(string: target.upload_url) else { throw CloudError.server("fal.ai upload failed") }
+
+        var put = URLRequest(url: uploadURL)
+        put.httpMethod = "PUT"
+        put.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
+        let (putData, putResponse) = try await CloudSession.shared.upload(for: put, from: audio)
+        guard let http = putResponse as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            print("[fal.ai] Upload failed: \(String(data: putData.prefix(300), encoding: .utf8) ?? "")")
+            throw CloudError.server("fal.ai upload failed")
+        }
+        return target.file_url
     }
 }
 

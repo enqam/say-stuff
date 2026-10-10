@@ -17,46 +17,44 @@ struct MenuBarView: View {
     @State private var hasAccessibility = AXIsProcessTrusted()
 
     private var settings: AppSettings { settingsManager.settings }
+    static let width: CGFloat = 320
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-                .padding(.horizontal, 16)
-                .padding(.top, 15)
-                .padding(.bottom, 14)
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
+                .padding(.bottom, 12)
 
             if !hasAccessibility {
                 accessibilityBanner
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
             }
 
             profiles
-                .padding(.horizontal, 12)
-                .padding(.bottom, 12)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
 
-            hairline
+            separator
             languages
-                .padding(.horizontal, 16)
-                .padding(.vertical, 11)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
 
             if !history.transcriptions.isEmpty {
-                hairline
+                separator
                 recent
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 6)
             }
 
-            hairline
+            separator
             footer
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
         }
-        .frame(width: 340)
-        .background(Theme.panelBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Theme.hairlineStrong))
-        .preferredColorScheme(.dark)
+        .frame(width: Self.width)
+        .glassSurface(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .background(GeometryReader { proxy in
             Color.clear.preference(key: HeightKey.self, value: proxy.size.height)
         })
@@ -64,18 +62,25 @@ struct MenuBarView: View {
         .onAppear { hasAccessibility = AXIsProcessTrusted() }
     }
 
-    private var hairline: some View {
-        Rectangle().fill(Theme.hairline).frame(height: 1)
+    private var separator: some View {
+        Rectangle().fill(Theme.hairline).frame(height: 1).padding(.horizontal, 14)
     }
 
     // MARK: Header
 
     private var header: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle().fill(statusTint.opacity(0.18))
+                Image(systemName: "waveform")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(statusTint)
+            }
+            .frame(width: 30, height: 30)
+
+            VStack(alignment: .leading, spacing: 2) {
                 Text("SayStuff")
-                    .font(.display(21))
-                    .foregroundStyle(Theme.text)
+                    .font(.system(size: 14, weight: .semibold))
                 status
             }
             Spacer()
@@ -83,51 +88,51 @@ struct MenuBarView: View {
         }
     }
 
+    private var statusTint: Color {
+        switch dictation.phase {
+        case .idle: return Theme.textSecondary
+        case .recording: return Theme.accent
+        case .processing: return Theme.warning
+        }
+    }
+
     @ViewBuilder
     private var status: some View {
-        switch dictation.phase {
-        case .idle:
-            HStack(spacing: 6) {
-                KeyCaps(combo: settings.hotkey, size: 9)
-                Text(settings.hotkeyMode == .hold ? "hold to talk" : "to talk")
-                    .font(.mono(10.5))
-                    .foregroundStyle(Theme.textTertiary)
-            }
-        case .recording(let since):
-            TimelineView(.periodic(from: since, by: 1)) { context in
-                let seconds = max(0, Int(context.date.timeIntervalSince(since)))
-                Label {
-                    Text("LISTENING \(seconds / 60):\(String(format: "%02d", seconds % 60))")
-                } icon: {
-                    Circle().fill(Theme.accent).frame(width: 6, height: 6)
+        Group {
+            switch dictation.phase {
+            case .idle:
+                Text("\(settings.hotkey.displayString) to talk")
+            case .recording(let since):
+                TimelineView(.periodic(from: since, by: 1)) { context in
+                    let seconds = max(0, Int(context.date.timeIntervalSince(since)))
+                    Text("Listening · \(seconds / 60):\(String(format: "%02d", seconds % 60))")
+                        .foregroundStyle(Theme.accent)
                 }
-                .font(.mono(10.5, weight: .semibold))
-                .foregroundStyle(Theme.accent)
+            case .processing:
+                Text("Transcribing…")
             }
-        case .processing:
-            Text("TRANSCRIBING…")
-                .font(.mono(10.5, weight: .semibold))
-                .foregroundStyle(Theme.textSecondary)
         }
+        .font(.mono(11.5))
+        .foregroundStyle(Theme.textSecondary)
     }
 
     private var accessibilityBanner: some View {
         Button {
             AppDelegate.shared.showOnboarding()
         } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "hand.raised.fill")
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.circle.fill")
                     .foregroundStyle(Theme.warning)
                 Text("Allow Accessibility so SayStuff can paste")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Theme.text)
-                Spacer()
-                Text("FIX")
-                    .font(.mono(10, weight: .bold))
+                    .font(.system(size: 12))
+                Spacer(minLength: 4)
+                Text("Fix")
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(Theme.warning)
             }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.warning.opacity(0.1)))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.warning.opacity(0.12)))
         }
         .buttonStyle(.plain)
     }
@@ -144,13 +149,10 @@ struct MenuBarView: View {
     }
 
     private var profiles: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
                 ForEach(profileChoices, id: \.?.id) { profile in
-                    ProfileTile(
-                        profile: profile,
-                        isSelected: settings.activeProfileID == profile?.id
-                    ) {
+                    ProfileTile(profile: profile, isSelected: settings.activeProfileID == profile?.id) {
                         settingsManager.settings.activeProfileID = profile?.id
                     }
                     .onHover { inside in
@@ -164,19 +166,19 @@ struct MenuBarView: View {
             }
 
             ProfilePreview(profile: previewProfile, compact: true)
-                .frame(height: 126, alignment: .top)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .frame(height: 124, alignment: .top)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             if previewProfile != nil, !keys.hasKey(.groq) {
                 Button {
-                    AppDelegate.shared.openSettings(.profiles)
+                    AppDelegate.shared.openSettings(.cloud)
                 } label: {
-                    Text("Profiles need a Groq key — add one ↗")
-                        .font(.system(size: 11))
+                    Label("Profiles need a Groq key", systemImage: "key")
+                        .font(.system(size: 11.5))
                         .foregroundStyle(Theme.warning)
                 }
                 .buttonStyle(.plain)
-                .padding(.leading, 2)
+                .padding(.leading, 4)
             }
         }
     }
@@ -190,19 +192,19 @@ struct MenuBarView: View {
     }
 
     private var languages: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             Image(systemName: "globe")
-                .font(.system(size: 11))
+                .font(.system(size: 12))
                 .foregroundStyle(Theme.textTertiary)
-                .padding(.trailing, 2)
+                .padding(.trailing, 3)
             ForEach(languageChoices, id: \.self) { code in
-                Chip(title: code == "auto" ? "AUTO" : code.uppercased(), isSelected: settings.language == code, mono: true) {
+                Chip(title: code == "auto" ? "Auto" : code.uppercased(), isSelected: settings.language == code) {
                     settingsManager.settings.selectLanguage(code)
                 }
             }
             Spacer()
-            IconButton(symbol: "plus", help: "More languages") {
-                AppDelegate.shared.openSettings(.transcription)
+            IconButton(symbol: "ellipsis", help: "All languages") {
+                AppDelegate.shared.openSettings(.speech)
             }
         }
     }
@@ -214,17 +216,14 @@ struct MenuBarView: View {
             HStack {
                 Eyebrow("Recent")
                 Spacer()
-                Button {
-                    AppDelegate.shared.openSettings(.history)
-                } label: {
-                    Text("ALL")
-                        .font(.mono(10, weight: .semibold))
-                        .foregroundStyle(Theme.textTertiary)
-                }
-                .buttonStyle(.plain)
+                Button("Show all") { AppDelegate.shared.openSettings(.history) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Theme.textSecondary)
             }
-            .padding(.horizontal, 10)
-            .padding(.bottom, 4)
+            .padding(.horizontal, 9)
+            .padding(.top, 2)
+            .padding(.bottom, 3)
 
             ForEach(history.transcriptions.prefix(3)) { item in
                 Button {
@@ -238,12 +237,12 @@ struct MenuBarView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 10) {
                         Text(item.text)
                             .font(.system(size: 12.5))
-                            .foregroundStyle(Theme.textSecondary)
+                            .foregroundStyle(Theme.text)
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
                         Spacer(minLength: 4)
-                        Text(copiedID == item.id ? "COPIED" : item.date.shortRelative)
-                            .font(.mono(10, weight: .medium))
+                        Text(copiedID == item.id ? "Copied" : item.date.shortRelative)
+                            .font(.mono(11))
                             .foregroundStyle(copiedID == item.id ? Theme.accent : Theme.textTertiary)
                     }
                 }
@@ -260,23 +259,16 @@ struct MenuBarView: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 2) {
-            if ledger.records.isEmpty {
-                Text(settings.engine == .local ? "On-device · free" : "Cloud")
-                    .font(.mono(10.5))
+        HStack(spacing: 0) {
+            Button {
+                AppDelegate.shared.openSettings(.cloud)
+            } label: {
+                Text(ledger.records.isEmpty ? "No cloud spend yet" : "\(monthCost.usdString) this month")
+                    .font(.mono(11.5))
                     .foregroundStyle(Theme.textTertiary)
-                    .padding(.leading, 6)
-            } else {
-                Button {
-                    AppDelegate.shared.openSettings(.transcription)
-                } label: {
-                    Text("\(monthCost.usdString) this month")
-                        .font(.mono(10.5))
-                        .foregroundStyle(Theme.textTertiary)
-                }
-                .buttonStyle(.plain)
-                .padding(.leading, 6)
             }
+            .buttonStyle(.plain)
+            .padding(.leading, 6)
             Spacer()
             IconButton(symbol: "gearshape", help: "Settings  ⌘,") { AppDelegate.shared.openSettings() }
                 .keyboardShortcut(",", modifiers: .command)
@@ -291,7 +283,7 @@ private struct HeightKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
 }
 
-/// Square-ish tile: icon over name. Selected tiles glow in the accent.
+/// Icon over name. The selected tile takes the accent.
 private struct ProfileTile: View {
     let profile: Profile?
     let isSelected: Bool
@@ -300,7 +292,7 @@ private struct ProfileTile: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(alignment: .leading, spacing: 9) {
+            VStack(alignment: .leading, spacing: 8) {
                 Image(systemName: profile?.symbol ?? "text.alignleft")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(isSelected ? Theme.accent : Theme.textSecondary)
@@ -313,54 +305,57 @@ private struct ProfileTile: View {
             .padding(.horizontal, 11)
             .padding(.vertical, 10)
             .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(isSelected ? Theme.accentSoft : (isHovering ? Theme.raised : Theme.surface))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(isSelected ? Theme.accent.opacity(0.55) : Theme.hairline)
             )
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .animation(.easeOut(duration: 0.12), value: isSelected)
+        .animation(.easeOut(duration: 0.1), value: isHovering)
     }
 }
 
-/// LOCAL | CLOUD in one click. Cloud without a key jumps to where you add one.
+/// Local | Cloud in one click. Cloud without a key jumps to where you add one.
 struct EngineSwitch: View {
     @ObservedObject private var settingsManager = SettingsManager.shared
     @ObservedObject private var keys = APIKeys.shared
+    @Namespace private var selection
 
     var body: some View {
         HStack(spacing: 0) {
-            segment(.local, title: "LOCAL")
-            segment(.cloud, title: "CLOUD")
+            segment(.local, title: "Local")
+            segment(.cloud, title: "Cloud")
         }
         .padding(2)
-        .background(Capsule().fill(Color.black.opacity(0.3)))
-        .overlay(Capsule().strokeBorder(Theme.hairline))
+        .background(Capsule().fill(Theme.surface))
     }
 
     private func segment(_ engine: TranscriptionEngine, title: String) -> some View {
         let isSelected = settingsManager.settings.engine == engine
         return Button {
-            settingsManager.settings.engine = engine
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+                settingsManager.settings.engine = engine
+            }
             if engine == .cloud, !keys.hasKey(.fal) {
-                AppDelegate.shared.openSettings(.transcription)
+                AppDelegate.shared.openSettings(.cloud)
             }
         } label: {
             Text(title)
-                .font(.mono(10, weight: .bold))
-                .tracking(0.6)
-                .foregroundStyle(isSelected ? Theme.text : Theme.textTertiary)
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(isSelected ? Theme.text : Theme.textSecondary)
                 .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Capsule().fill(isSelected ? Theme.raised : Color.clear))
+                .padding(.vertical, 4)
+                .background {
+                    if isSelected {
+                        Capsule()
+                            .fill(Theme.raised)
+                            .matchedGeometryEffect(id: "engine", in: selection)
+                    }
+                }
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .animation(.easeOut(duration: 0.12), value: isSelected)
     }
 }

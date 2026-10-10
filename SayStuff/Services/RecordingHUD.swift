@@ -9,7 +9,7 @@ import QuartzCore
 /// and no per-frame view work.
 final class RecordingHUD {
     private enum Metrics {
-        static let height: CGFloat = 34
+        static let height: CGFloat = 36
         static let barCount = 15
         static let barWidth: CGFloat = 3
         static let barGap: CGFloat = 3
@@ -59,15 +59,26 @@ final class RecordingHUD {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
         pill.wantsLayer = true
-        pill.appearance = NSAppearance(named: .darkAqua)
-        if let layer = pill.layer {
-            layer.backgroundColor = NSColor(red: 0.086, green: 0.082, blue: 0.075, alpha: 0.96).cgColor
-            layer.cornerRadius = Metrics.height / 2
-            layer.cornerCurve = .continuous
-            layer.borderWidth = 0.5
-            layer.borderColor = NSColor(white: 1, alpha: 0.12).cgColor
+        panel.appearance = NSAppearance(named: .darkAqua)  // white bars need a dark pill on any wallpaper
+        if #available(macOS 26.0, *) {
+            // One glass view; the bars are plain layers inside it.
+            let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: Metrics.pillWidth, height: Metrics.height))
+            glass.cornerRadius = Metrics.height / 2
+            glass.tintColor = NSColor(white: 0, alpha: 0.45)
+            pill.frame = glass.bounds
+            pill.autoresizingMask = [.width, .height]
+            glass.contentView = pill
+            panel.contentView = glass
+        } else {
+            if let layer = pill.layer {
+                layer.backgroundColor = NSColor(white: 0.08, alpha: 0.94).cgColor
+                layer.cornerRadius = Metrics.height / 2
+                layer.cornerCurve = .continuous
+                layer.borderWidth = 0.5
+                layer.borderColor = NSColor(white: 1, alpha: 0.12).cgColor
+            }
+            panel.contentView = pill
         }
-        panel.contentView = pill
 
         dot.backgroundColor = Theme.nsAccent.cgColor
         dot.cornerRadius = Metrics.dotSize / 2
@@ -170,8 +181,9 @@ final class RecordingHUD {
 
         let iconWidth: CGFloat = image == nil ? 0 : 16 + 7
         let width = Metrics.padding * 2 + iconWidth + ceil(label.frame.width)
-        resize(width: max(width, Metrics.height * 2))
-        let originX = (pill.bounds.width - iconWidth - label.frame.width) / 2
+        let pillWidth = max(width, Metrics.height * 2)
+        resize(width: pillWidth)
+        let originX = (pillWidth - iconWidth - label.frame.width) / 2
         icon.frame = NSRect(x: originX, y: (Metrics.height - 16) / 2, width: 16, height: 16)
         label.frame.origin = NSPoint(x: originX + iconWidth, y: (Metrics.height - label.frame.height) / 2)
 

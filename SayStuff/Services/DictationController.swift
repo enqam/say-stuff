@@ -154,10 +154,11 @@ final class DictationController: ObservableObject {
     private func warmUpConnections() {
         let keys = APIKeys.shared
         if settings.engine == .cloud, keys.hasKey(.fal) {
-            CloudSession.preconnect(FalTranscriber.endpoint)
+            CloudSession.preconnect(URL(string: "https://rest.fal.ai/")!)
+            CloudSession.preconnect(URL(string: "https://fal.run/")!)
         }
         if settings.activeProfileID != nil, keys.hasKey(.groq) {
-            CloudSession.preconnect(GroqFormatter.endpoint)
+            CloudSession.preconnect(URL(string: "https://api.groq.com/")!)
         }
     }
 
@@ -219,7 +220,9 @@ final class DictationController: ObservableObject {
                 outcome.usage.forEach(UsageLedger.shared.add)
                 let text = self.finalize(outcome.text)
                 guard !text.isEmpty else {
-                    self.notify("No speech detected", symbol: "waveform.slash", duration: 1.4)
+                    self.notify(outcome.note ?? "No speech detected",
+                                symbol: outcome.note == nil ? "waveform.slash" : "exclamationmark.triangle",
+                                duration: outcome.note == nil ? 1.4 : 2.6)
                     return
                 }
                 TranscriptionStore.shared.add(text.trimmingCharacters(in: .whitespaces))
@@ -261,7 +264,16 @@ final class DictationController: ObservableObject {
                 usage.append(UsageRecord(service: .transcription, provider: "fal.ai Wizper v3",
                                          quantity: job.recording.duration, costUSD: cost, isEstimate: isEstimate))
             } catch {
-                guard job.localAvailable else { throw error }
+                if let failure = error as? FalBilledFailure {
+                    let (cost, isEstimate) = await FalPricing.shared.cost(
+                        audioSeconds: job.recording.duration, requestSeconds: failure.requestSeconds, key: key)
+                    usage.append(UsageRecord(service: .transcription, provider: "fal.ai Wizper v3 (failed)",
+                                             quantity: job.recording.duration, costUSD: cost, isEstimate: isEstimate))
+                }
+                guard job.localAvailable else {
+                    // Keep the spend record even though there's nothing to paste.
+                    return Outcome(text: "", note: error.localizedDescription, usage: usage)
+                }
                 print("[Dictation] Cloud transcription failed, using local: \(error)")
                 notes.append("Cloud unavailable — transcribed on this Mac")
                 text = try await transcribeLocally()

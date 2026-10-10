@@ -18,7 +18,7 @@ final class MenuPanel {
     var isShown: Bool { panel.isVisible }
 
     init<Content: View>(@ViewBuilder content: (_ resize: @escaping (CGFloat) -> Void) -> Content) {
-        panel = Panel(contentRect: NSRect(x: 0, y: 0, width: 340, height: 400),
+        panel = Panel(contentRect: NSRect(x: 0, y: 0, width: MenuBarView.width, height: 400),
                       styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -28,7 +28,6 @@ final class MenuPanel {
         panel.hidesOnDeactivate = false
         panel.animationBehavior = .none
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
-        panel.appearance = NSAppearance(named: .darkAqua)
 
         var resize: (CGFloat) -> Void = { _ in }
         host = NSHostingView(rootView: AnyView(EmptyView()))
@@ -44,7 +43,7 @@ final class MenuPanel {
     func show(from button: NSStatusBarButton) {
         anchor = button
         let size = host.fittingSize
-        panel.setContentSize(NSSize(width: 340, height: size.height))
+        panel.setContentSize(NSSize(width: MenuBarView.width, height: size.height))
         position()
         panel.alphaValue = 0
         panel.makeKeyAndOrderFront(nil)

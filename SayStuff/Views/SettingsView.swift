@@ -2,16 +2,17 @@ import SwiftUI
 import ServiceManagement
 
 enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, transcription, profiles, dictionary, history
+    case general, speech, profiles, dictionary, cloud, history
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .general: return "General"
-        case .transcription: return "Transcription"
+        case .speech: return "Speech"
         case .profiles: return "Profiles"
         case .dictionary: return "Dictionary"
+        case .cloud: return "Cloud"
         case .history: return "History"
         }
     }
@@ -24,54 +25,58 @@ final class SettingsRouter: ObservableObject {
 
 struct SettingsView: View {
     @ObservedObject private var router = SettingsRouter.shared
+    @Namespace private var tabSelection
 
     var body: some View {
-        VStack(spacing: 0) {
-            tabs
-                .padding(.top, 9)
-                .padding(.bottom, 10)
-            Rectangle().fill(Theme.hairline).frame(height: 1)
-
-            ScrollView {
-                Group {
-                    switch router.pane {
-                    case .general: GeneralPane()
-                    case .transcription: TranscriptionPane()
-                    case .profiles: ProfilesPane()
-                    case .dictionary: DictionaryPane()
-                    case .history: HistoryPane()
-                    }
+        ScrollView {
+            Group {
+                switch router.pane {
+                case .general: GeneralPane()
+                case .speech: SpeechPane()
+                case .profiles: ProfilesPane()
+                case .dictionary: DictionaryPane()
+                case .cloud: CloudPane()
+                case .history: HistoryPane()
                 }
-                .padding(24)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .padding(.horizontal, 26)
+            .padding(.top, 64)
+            .padding(.bottom, 26)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // The tab bar floats over the content in the title bar area, like a toolbar.
+        .overlay(alignment: .top) {
+            tabs.padding(.top, 9)
         }
         .frame(minWidth: 620, minHeight: 520)
-        .background(Theme.panelBackground)
-        .preferredColorScheme(.dark)
     }
 
     private var tabs: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 0) {
             ForEach(SettingsPane.allCases) { pane in
                 let isSelected = router.pane == pane
                 Button {
-                    router.pane = pane
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { router.pane = pane }
                 } label: {
                     Text(pane.title)
-                        .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
-                        .foregroundStyle(isSelected ? Theme.text : Theme.textTertiary)
+                        .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
+                        .foregroundStyle(isSelected ? Theme.text : Theme.textSecondary)
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 5)
-                        .background(Capsule().fill(isSelected ? Theme.raised : Color.clear))
+                        .padding(.vertical, 6)
+                        .background {
+                            if isSelected {
+                                Capsule()
+                                    .fill(Theme.raised)
+                                    .matchedGeometryEffect(id: "tab", in: tabSelection)
+                            }
+                        }
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(2)
-        .background(Capsule().fill(Color.black.opacity(0.25)))
-        .frame(maxWidth: .infinity)
+        .padding(3)
+        .glassSurface(Capsule())
     }
 }
 
@@ -203,10 +208,11 @@ struct GeneralPane: View {
     }
 }
 
-// MARK: - Transcription
+// MARK: - Speech
 
-struct TranscriptionPane: View {
+struct SpeechPane: View {
     @ObservedObject private var settingsManager = SettingsManager.shared
+    @ObservedObject private var keys = APIKeys.shared
     @State private var showsFiles = false
 
     var body: some View {
@@ -249,9 +255,15 @@ struct TranscriptionPane: View {
                     }
                 }
             } else {
-                SettingsSection(title: "fal.ai key",
-                                footnote: "If the cloud can't be reached, SayStuff falls back to your local model.") {
-                    Card { APIKeyRow(provider: .fal).padding(14) }
+                Card {
+                    CardRow(title: "fal.ai Wizper v3",
+                            detail: keys.hasKey(.fal)
+                                ? "Falls back to your local model if the cloud can't be reached."
+                                : "Add your fal.ai key to transcribe in the cloud.",
+                            showsDivider: false) {
+                        Button(keys.hasKey(.fal) ? "Manage key" : "Add key") { SettingsRouter.shared.pane = .cloud }
+                            .buttonStyle(PillButtonStyle(prominent: !keys.hasKey(.fal)))
+                    }
                 }
             }
 
@@ -272,7 +284,6 @@ struct TranscriptionPane: View {
                 }
             }
 
-            SettingsSection(title: "Spend") { UsageCard() }
         }
     }
 
@@ -301,5 +312,25 @@ struct TranscriptionPane: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Cloud
+
+/// Every API key in one place, plus what they've cost.
+struct CloudPane: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            SettingsSection(title: "fal.ai", footnote: "Cloud speech-to-text (Wizper v3). Used when the engine is set to Cloud.") {
+                Card { APIKeyRow(provider: .fal).padding(14) }
+            }
+            SettingsSection(title: "Groq", footnote: "Rewrites text for profiles with openai/gpt-oss-20b. Raw doesn't use it.") {
+                Card { APIKeyRow(provider: .groq).padding(14) }
+            }
+            SettingsSection(title: "Spend") { UsageCard() }
+            Text("Keys are stored in your Keychain.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.textTertiary)
+        }
     }
 }

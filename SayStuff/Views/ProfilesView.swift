@@ -14,14 +14,19 @@ struct ProfilesPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
+            if !keys.hasKey(.groq) {
+                Card {
+                    CardRow(title: "Profiles need a Groq key",
+                            detail: "Until then every profile pastes what you said, as is.",
+                            showsDivider: false) {
+                        Button("Add key") { SettingsRouter.shared.pane = .cloud }
+                            .buttonStyle(PillButtonStyle(prominent: true))
+                    }
+                }
+            }
             HStack(alignment: .top, spacing: 16) {
                 list.frame(width: 150)
                 detail.frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            SettingsSection(title: "Groq key",
-                            footnote: "Profiles rewrite your words with openai/gpt-oss-20b on Groq at temperature 0, usually in well under a second. Raw needs no key.") {
-                Card { APIKeyRow(provider: .groq).padding(14) }
             }
         }
     }
@@ -133,7 +138,7 @@ struct ProfilesPane: View {
                     }
                     .buttonStyle(PillButtonStyle())
                     .disabled(!keys.hasKey(.groq) || isPreviewing)
-                    .help(keys.hasKey(.groq) ? "Run the sample through this profile" : "Add a Groq key below")
+                    .help(keys.hasKey(.groq) ? "Run the sample through this profile" : "Add a Groq key in Cloud")
                 }
                 ProfilePreview(profile: value, liveOutput: previewText[value.id])
                 if let previewError {

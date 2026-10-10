@@ -98,8 +98,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window.title = "SayStuff"
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
-            window.appearance = NSAppearance(named: .darkAqua)
-            window.backgroundColor = NSColor(red: 0.075, green: 0.071, blue: 0.067, alpha: 1)
             window.contentViewController = NSHostingController(rootView: SettingsView())
             window.setContentSize(NSSize(width: 640, height: 640))
             window.minSize = NSSize(width: 620, height: 520)
@@ -124,7 +122,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.isMovableByWindowBackground = true
-            window.appearance = NSAppearance(named: .darkAqua)
             window.contentViewController = NSHostingController(rootView: OnboardingView { [weak self] in
                 SettingsManager.shared.settings.hasCompletedOnboarding = true
                 self?.onboardingWindow?.close()

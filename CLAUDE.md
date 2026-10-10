@@ -22,7 +22,7 @@ SayStuff is a macOS menu bar app for voice-to-text transcription. Press a hotkey
 - **ProfileStore / DictionaryStore / UsageLedger**: Output profiles (Raw = none), custom vocabulary + mishearing fixes, API spend records
 - **ScreenBorderOverlay**: Optional red border around the screen during recording
 
-UI: `MenuBarView` in a custom `MenuPanel` (doesn't steal focus) and `SettingsView` (one window, top tabs). Design tokens live in `Views/Components.swift` (`Theme`). Debug builds can render every screen to PNGs: `SAYSTUFF_SNAPSHOT_DIR=/tmp/shots <app>/Contents/MacOS/SayStuff`.
+UI: `MenuBarView` in a custom `MenuPanel` (doesn't steal focus) and `SettingsView` (one window, top tabs). Design tokens live in `Views/Components.swift` (`Theme`, `glassSurface`). Liquid Glass only on floating chrome (menu panel, tab bar, HUD). Debug builds can render every screen to PNGs: `SAYSTUFF_SNAPSHOT_DIR=/tmp/shots <app>/Contents/MacOS/SayStuff`.
 
 # btca
 

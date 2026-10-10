@@ -63,8 +63,6 @@ struct OnboardingView: View {
             .padding(20)
         }
         .frame(width: 500, height: 500)
-        .background(Theme.panelBackground)
-        .preferredColorScheme(.dark)
         .onReceive(permissionTimer) { _ in refreshPermissions() }
     }
 
@@ -119,7 +117,7 @@ struct OnboardingView: View {
     private func title(_ title: String, _ subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.display(30))
+                .font(.system(size: 26, weight: .bold))
                 .foregroundStyle(Theme.text)
             Text(subtitle)
                 .font(.system(size: 13))
@@ -170,7 +168,7 @@ private struct PermissionRow: View {
             }
             Spacer()
             if isGranted {
-                Text("ALLOWED").font(.mono(10, weight: .bold)).foregroundStyle(Theme.success)
+                Label("Allowed", systemImage: "checkmark.circle.fill").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.success)
             } else {
                 Button("Allow", action: action).buttonStyle(PillButtonStyle(prominent: true))
             }

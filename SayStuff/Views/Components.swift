@@ -3,64 +3,62 @@ import Carbon.HIToolbox
 
 // MARK: - Theme
 
-/// Warm graphite with one vermilion accent. New York for display text, SF Mono for
-/// anything you'd glance at (keys, times, money), SF Pro for the rest.
+/// System type, adaptive colors and one warm accent. Liquid Glass is reserved for the
+/// floating chrome (menu panel, tab bar, recording pill); content sits on plain fills.
 enum Theme {
-    static let background = Color(hex: 0x131211)
-    static let backgroundTop = Color(hex: 0x1B1A18)
-    static let surface = Color(hex: 0x1D1C1A)
-    static let raised = Color(hex: 0x272522)
-    static let hairline = Color.white.opacity(0.07)
-    static let hairlineStrong = Color.white.opacity(0.12)
+    static let surface = Color.primary.opacity(0.045)
+    static let raised = Color.primary.opacity(0.08)
+    static let hairline = Color.primary.opacity(0.07)
+    static let hairlineStrong = Color.primary.opacity(0.12)
 
-    static let text = Color(hex: 0xEFEBE4)
-    static let textSecondary = Color(hex: 0xA7A199)
-    static let textTertiary = Color(hex: 0x6E6962)
+    static let text = Color.primary
+    static let textSecondary = Color.secondary
+    static let textTertiary = Color(nsColor: .tertiaryLabelColor)
 
-    static let accent = Color(hex: 0xFF5B3A)
-    static let accentSoft = Color(hex: 0xFF5B3A, opacity: 0.14)
-    static let success = Color(hex: 0x7BD88F)
-    static let warning = Color(hex: 0xF5B451)
+    static let accent = Color(red: 1, green: 0.40, blue: 0.29)
+    static let accentSoft = accent.opacity(0.16)
+    static let success = Color(nsColor: .systemGreen)
+    static let warning = Color(nsColor: .systemOrange)
 
-    static let nsAccent = NSColor(red: 1, green: 0.357, blue: 0.227, alpha: 1)
-
-    static var panelBackground: some View {
-        LinearGradient(colors: [backgroundTop, background], startPoint: .top, endPoint: .bottom)
-    }
-}
-
-extension Color {
-    init(hex: UInt32, opacity: Double = 1) {
-        self.init(
-            .sRGB,
-            red: Double((hex >> 16) & 0xFF) / 255,
-            green: Double((hex >> 8) & 0xFF) / 255,
-            blue: Double(hex & 0xFF) / 255,
-            opacity: opacity
-        )
-    }
+    static let nsAccent = NSColor(red: 1, green: 0.40, blue: 0.29, alpha: 1)
 }
 
 extension Font {
     static func display(_ size: CGFloat, weight: Font.Weight = .semibold) -> Font {
-        .system(size: size, weight: weight, design: .serif)
+        .system(size: size, weight: weight)
     }
 
+    /// Tabular figures for times, money and key caps.
     static func mono(_ size: CGFloat, weight: Font.Weight = .medium) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
+        .system(size: size, weight: weight).monospacedDigit()
     }
 }
 
-/// Small uppercase mono label used to name sections.
+extension View {
+    /// Liquid Glass on macOS 26+, a vibrant material before that. One glass layer per surface;
+    /// nothing inside it is glass, which keeps compositing cheap.
+    @ViewBuilder
+    func glassSurface<S: Shape>(_ shape: S, tint: Color? = nil, interactive: Bool = false) -> some View {
+        if UISnapshotMode.isActive {
+            // Glass is composited by the window server and can't be captured offscreen.
+            self.background(Color(nsColor: .controlBackgroundColor), in: shape)
+        } else if #available(macOS 26.0, *) {
+            self.glassEffect(Glass.regular.tint(tint).interactive(interactive), in: shape)
+        } else {
+            self.background(.regularMaterial, in: shape)
+        }
+    }
+}
+
+/// Section label.
 struct Eyebrow: View {
     let text: String
     init(_ text: String) { self.text = text }
 
     var body: some View {
-        Text(text.uppercased())
-            .font(.mono(10, weight: .semibold))
-            .tracking(1.2)
-            .foregroundStyle(Theme.textTertiary)
+        Text(text)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(Theme.textSecondary)
     }
 }
 
@@ -248,7 +246,7 @@ struct HoverRowStyle: ButtonStyle {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.white.opacity(configuration.isPressed ? 0.09 : (isHovering ? 0.05 : 0)))
+                        .fill(Color.primary.opacity(configuration.isPressed ? 0.1 : (isHovering ? 0.06 : 0)))
                 )
                 .contentShape(Rectangle())
                 .onHover { isHovering = $0 }
@@ -339,6 +337,7 @@ struct APIKeyRow: View {
                 }
             }
         }
+        .onAppear(perform: verifyIfNeeded)
     }
 
     @ViewBuilder
@@ -356,6 +355,12 @@ struct APIKeyRow: View {
             ProgressView().controlSize(.small)
         case .unknown:
             EmptyView()
+        }
+    }
+
+    private func verifyIfNeeded() {
+        if keys.hasKey(provider), (keys.status[provider] ?? .unknown) == .unknown {
+            keys.verify(provider)
         }
     }
 
@@ -480,10 +485,12 @@ struct ModelRow: View {
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(isDownloaded ? Theme.text : Theme.textSecondary)
                         if model == .small {
-                            Text("RECOMMENDED")
-                                .font(.mono(9, weight: .bold))
-                                .tracking(0.8)
+                            Text("Recommended")
+                                .font(.system(size: 10.5, weight: .semibold))
                                 .foregroundStyle(Theme.accent)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(Capsule().fill(Theme.accentSoft))
                         }
                     }
                     Text(downloader.errors[model] ?? "\(model.description) · \(model.sizeString)")
@@ -508,7 +515,7 @@ struct ModelRow: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(Color.white.opacity(isHovering && isDownloaded && !isSelected ? 0.03 : 0))
+            .background(Color.primary.opacity(isHovering && isDownloaded && !isSelected ? 0.03 : 0))
             .contentShape(Rectangle())
             .onTapGesture { if isDownloaded { settingsManager.settings.modelSize = model } }
             .onHover { isHovering = $0 }
@@ -544,8 +551,7 @@ struct ProfilePreview: View {
         }
         .padding(compact ? 11 : 14)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.22)))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.hairline))
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.surface))
     }
 }
 
