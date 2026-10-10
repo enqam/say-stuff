@@ -23,9 +23,20 @@ final class WhisperService {
 
         guard FileManager.default.fileExists(atPath: request.modelPath) else { throw WhisperError.modelNotFound }
 
-        if let serverPath = WhisperServer.binaryPath(nextTo: request.whisperPath),
-           let server = try? await WhisperServer.shared.baseURL(binary: serverPath, model: request.modelPath) {
-            return try await transcribeWithServer(server, request)
+        if let serverPath = WhisperServer.binaryPath(nextTo: request.whisperPath) {
+            let server = WhisperServer.shared
+            await server.beginUse()
+            if let base = try? await server.baseURL(binary: serverPath, model: request.modelPath) {
+                do {
+                    let text = try await transcribeWithServer(base, request)
+                    await server.endUse()
+                    return text
+                } catch {
+                    await server.endUse()
+                    throw error
+                }
+            }
+            await server.endUse()
         }
         return try await transcribeWithCLI(request)
     }
@@ -193,12 +204,50 @@ final class WhisperService {
     }
 }
 
-/// Keeps one `whisper-server` running on localhost with the selected model loaded.
-/// Idle, it uses no CPU; it holds the model in memory so dictations skip the load.
+/// Runs `whisper-server` on localhost with the selected model loaded, so dictations skip the
+/// ~1.3 s model load. It's started when recording begins (the load overlaps with speaking) and
+/// stopped after `idleTimeout` without use, so the model's memory (≈1.8 GB for Large v3 Turbo)
+/// isn't held while you're not dictating.
 actor WhisperServer {
     static let shared = WhisperServer()
 
     private var process: Process?
+    private var inFlight = 0
+    private var idleTask: Task<Void, Never>?
+    /// Seconds; 0 keeps the model loaded indefinitely.
+    private var idleTimeout: TimeInterval = 300
+
+    func setIdleTimeout(_ seconds: TimeInterval) {
+        idleTimeout = seconds
+        scheduleIdleStop()
+    }
+
+    func beginUse() {
+        inFlight += 1
+        idleTask?.cancel()
+    }
+
+    func endUse() {
+        inFlight = max(0, inFlight - 1)
+        scheduleIdleStop()
+    }
+
+    private func scheduleIdleStop() {
+        idleTask?.cancel()
+        guard idleTimeout > 0, process != nil else { return }
+        let timeout = idleTimeout
+        idleTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+            guard !Task.isCancelled else { return }
+            await self?.stopIfIdle()
+        }
+    }
+
+    private func stopIfIdle() {
+        guard inFlight == 0, process != nil else { return }
+        print("[WhisperServer] Idle — unloading model")
+        stop()
+    }
     private var model: String?
     private var port: Int = 0
     private var starting: Task<URL, Error>?
@@ -259,13 +308,21 @@ actor WhisperServer {
         }
     }
 
-    /// Loads the model ahead of the first dictation.
+    /// Starts loading the model now (called when recording begins).
     func prewarm(cliPath: String, model: String) async {
         guard let binary = Self.binaryPath(nextTo: cliPath), FileManager.default.fileExists(atPath: model) else { return }
         _ = try? await baseURL(binary: binary, model: model)
+        scheduleIdleStop()
+    }
+
+    /// Stops the server if it has a different model loaded than `model`.
+    func stopUnless(model: String) {
+        if self.model != model { stop() }
     }
 
     func stop() {
+        idleTask?.cancel()
+        idleTask = nil
         process?.terminate()
         process = nil
         UserDefaults.standard.removeObject(forKey: pidKey)

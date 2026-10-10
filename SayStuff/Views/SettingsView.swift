@@ -228,6 +228,11 @@ struct SpeechPane: View {
                         ForEach(WhisperModel.allCases, id: \.self) { model in
                             ModelRow(model: model)
                         }
+                        CardRow(title: "Keep model in memory",
+                                detail: "Loads while you start talking, then frees its memory (\(settingsManager.settings.modelSize.memoryString)) when idle.") {
+                            ChipPicker(options: [(5.0, "5 min"), (30, "30 min"), (0, "Always")],
+                                       selection: $settingsManager.settings.modelIdleMinutes)
+                        }
                         Button {
                             withAnimation(.easeOut(duration: 0.15)) { showsFiles.toggle() }
                         } label: {

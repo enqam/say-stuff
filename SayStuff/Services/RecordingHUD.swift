@@ -59,18 +59,17 @@ final class RecordingHUD {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
         pill.wantsLayer = true
-        panel.appearance = NSAppearance(named: .darkAqua)  // white bars need a dark pill on any wallpaper
         if #available(macOS 26.0, *) {
             // One glass view; the bars are plain layers inside it.
             let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: Metrics.pillWidth, height: Metrics.height))
             glass.cornerRadius = Metrics.height / 2
-            glass.style = .clear  // no frost: pure refraction, with a faint shade so white bars stay legible
-            glass.tintColor = NSColor(white: 0, alpha: 0.12)
+            glass.style = .clear  // the clearest glass AppKit offers: refraction, no frost, no tint
             pill.frame = glass.bounds
             pill.autoresizingMask = [.width, .height]
             glass.contentView = pill
             panel.contentView = glass
         } else {
+            panel.appearance = NSAppearance(named: .darkAqua)
             if let layer = pill.layer {
                 layer.backgroundColor = NSColor(white: 0.08, alpha: 0.94).cgColor
                 layer.cornerRadius = Metrics.height / 2
@@ -90,6 +89,10 @@ final class RecordingHUD {
             let bar = CALayer()
             bar.backgroundColor = NSColor.white.cgColor
             bar.cornerRadius = Metrics.barWidth / 2
+            // A hairline edge instead of a tint or shadow keeps white bars readable on bright
+            // backgrounds without frosting the glass (borders don't need an offscreen pass).
+            bar.borderWidth = 0.5
+            bar.borderColor = NSColor(white: 0, alpha: 0.28).cgColor
             barsLayer.addSublayer(bar)
             bars.append(bar)
         }

@@ -81,6 +81,10 @@ struct Profile: Codable, Identifiable, Hashable {
                     input: "can you um rename the user data variable to profile across the whole file",
                     output: "Rename the userData variable to profile across the whole file."
                 ),
+                Example(
+                    input: "so is the uh local transcription actually faster now or not",
+                    output: "Is local transcription actually faster now?"
+                ),
             ]
         case formalID:
             return [
@@ -91,6 +95,10 @@ struct Profile: Codable, Identifiable, Hashable {
                 Example(
                     input: "so the meeting got moved to thursday at three because uh half the team is out on wednesday",
                     output: "The meeting has been moved to Thursday at 3:00 because half the team is out on Wednesday."
+                ),
+                Example(
+                    input: "um could you tell me what time works for you next week",
+                    output: "Could you tell me what time works for you next week?"
                 ),
             ]
         default:

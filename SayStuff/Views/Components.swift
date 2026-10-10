@@ -118,6 +118,8 @@ struct Chip: View {
     var body: some View {
         Button(action: action) {
             Text(title)
+                .lineLimit(1)
+                .fixedSize()
                 .font(mono ? .mono(11, weight: .semibold) : .system(size: 12, weight: .medium))
                 .foregroundStyle(isSelected ? Theme.accent : (isHovering ? Theme.text : Theme.textSecondary))
                 .padding(.horizontal, 10)

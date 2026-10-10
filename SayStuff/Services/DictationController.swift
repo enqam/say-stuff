@@ -60,22 +60,26 @@ final class DictationController: ObservableObject {
             .sink { [weak self] combo in self?.registerDictationHotkey(combo) }
             .store(in: &cancellables)
 
-        // Keep the local model loaded while the local engine is selected.
         settingsManager.$settings
-            .map { [$0.engine.rawValue, $0.modelSize.rawValue, $0.whisperPath, $0.modelDirectory] }
+            .map { [$0.engine.rawValue, $0.modelSize.rawValue, $0.whisperPath, $0.modelDirectory, "\($0.modelIdleMinutes)"] }
             .removeDuplicates()
             .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in self?.updateLocalServer() }
             .store(in: &cancellables)
     }
 
+    /// The local model is loaded on demand; settings changes only unload it when it no longer fits.
     private func updateLocalServer() {
-        let cli = settingsManager.whisperBinaryPath
         let model = settingsManager.modelPath
-        if settings.engine == .local {
-            Task { await WhisperServer.shared.prewarm(cliPath: cli, model: model) }
-        } else {
-            Task { await WhisperServer.shared.stop() }  // started again on demand if the cloud falls back
+        let idle = settings.modelIdleMinutes * 60
+        let usesLocal = settings.engine == .local
+        Task {
+            await WhisperServer.shared.setIdleTimeout(idle)
+            if usesLocal {
+                await WhisperServer.shared.stopUnless(model: model)
+            } else {
+                await WhisperServer.shared.stop()  // started again on demand if the cloud falls back
+            }
         }
     }
 
@@ -125,6 +129,11 @@ final class DictationController: ObservableObject {
             attenuator.attenuate(to: settings.attenuationLevel, after: soundLength)
         }
         warmUpConnections()
+        if settings.engine == .local {
+            // Load the model while the user talks; usually ready before they stop.
+            let cli = settingsManager.whisperBinaryPath, model = settingsManager.modelPath
+            Task.detached(priority: .userInitiated) { await WhisperServer.shared.prewarm(cliPath: cli, model: model) }
+        }
 
         autoStopTimer?.invalidate()
         autoStopTimer = Timer.scheduledTimer(withTimeInterval: settings.toggleTimeout, repeats: false) { [weak self] _ in
@@ -335,7 +344,12 @@ final class DictationController: ObservableObject {
             if let key = job.groqKey {
                 do {
                     let result = try await GroqFormatter().format(text, profile: profile, vocabulary: job.vocabulary, key: key)
-                    text = job.fixWords(result.text)
+                    if GroqFormatter.looksLikeRewrite(result.text, of: text) {
+                        text = job.fixWords(result.text)
+                    } else {
+                        print("[Dictation] Formatter answered instead of rewriting; pasting as spoken: \(result.text)")
+                        notes.append("\(profile.name) changed too much — pasted as spoken")
+                    }
                     usage.append(UsageRecord(service: .formatting, provider: "Groq gpt-oss-20b",
                                              quantity: Double(result.promptTokens + result.completionTokens),
                                              costUSD: result.cost))

@@ -73,6 +73,8 @@ struct AppSettings: Codable, Equatable {
     // Transcription
     var engine: TranscriptionEngine = .local
     var cloudProvider: CloudProvider = .groq
+    /// Minutes the local model stays in memory after the last dictation; 0 = always.
+    var modelIdleMinutes: Double = 5
     var modelSize: WhisperModel = .small
     var whisperPath: String = "/usr/local/bin/whisper-cli"
     var modelDirectory: String = "~/Library/Application Support/SayStuff/models"
@@ -117,6 +119,7 @@ struct AppSettings: Codable, Equatable {
         }
         engine = value(.engine, d.engine)
         cloudProvider = value(.cloudProvider, d.cloudProvider)
+        modelIdleMinutes = value(.modelIdleMinutes, d.modelIdleMinutes)
         modelSize = value(.modelSize, d.modelSize)
         whisperPath = value(.whisperPath, d.whisperPath)
         modelDirectory = value(.modelDirectory, d.modelDirectory)

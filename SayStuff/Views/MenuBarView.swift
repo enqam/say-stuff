@@ -37,6 +37,9 @@ struct MenuBarView: View {
                 .padding(.bottom, 10)
 
             separator
+            models
+                .padding(.horizontal, 14)
+                .padding(.top, 9)
             languages
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
@@ -183,6 +186,44 @@ struct MenuBarView: View {
         }
     }
 
+    // MARK: Model
+
+    @ObservedObject private var downloader = ModelDownloader.shared
+
+    private var downloadedModels: [WhisperModel] {
+        _ = downloader.completedCount
+        return WhisperModel.allCases.filter { settingsManager.isModelDownloaded($0) }
+    }
+
+    @ViewBuilder
+    private var models: some View {
+        HStack(spacing: 5) {
+            Image(systemName: settings.engine == .local ? "cpu" : "cloud")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.textTertiary)
+                .frame(width: 16)
+                .padding(.trailing, 3)
+            if settings.engine == .local {
+                ForEach(downloadedModels, id: \.self) { model in
+                    Chip(title: model.shortName, isSelected: settings.modelSize == model) {
+                        settingsManager.settings.modelSize = model
+                    }
+                }
+            } else {
+                ForEach(CloudProvider.allCases, id: \.self) { provider in
+                    Chip(title: provider == .groq ? "Groq" : "fal.ai", isSelected: settings.cloudProvider == provider) {
+                        settingsManager.settings.cloudProvider = provider
+                        if !keys.hasKey(provider.keyProvider) { AppDelegate.shared.openSettings(.cloud) }
+                    }
+                }
+            }
+            Spacer()
+            IconButton(symbol: "ellipsis", help: settings.engine == .local ? "Download models" : "Cloud keys") {
+                AppDelegate.shared.openSettings(settings.engine == .local ? .speech : .cloud)
+            }
+        }
+    }
+
     // MARK: Language
 
     private var languageChoices: [String] {
@@ -196,6 +237,7 @@ struct MenuBarView: View {
             Image(systemName: "globe")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.textTertiary)
+                .frame(width: 16)
                 .padding(.trailing, 3)
             ForEach(languageChoices, id: \.self) { code in
                 Chip(title: code == "auto" ? "Auto" : code.uppercased(), isSelected: settings.language == code) {

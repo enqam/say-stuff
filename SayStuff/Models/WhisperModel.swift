@@ -33,6 +33,25 @@ enum WhisperModel: String, Codable, CaseIterable {
         }
     }
 
+    var shortName: String {
+        switch self {
+        case .tiny: return "Tiny"
+        case .small: return "Small"
+        case .medium: return "Medium"
+        case .largeTurbo: return "Turbo"
+        }
+    }
+
+    /// Approximate resident memory while loaded in whisper-server.
+    var memoryString: String {
+        switch self {
+        case .tiny: return "~0.2 GB"
+        case .small: return "~0.6 GB"
+        case .medium: return "~1.7 GB"
+        case .largeTurbo: return "~1.8 GB"
+        }
+    }
+
     var filename: String {
         "ggml-\(rawValue).bin"
     }
