@@ -275,7 +275,7 @@ final class CorrectionWatcher {
             let range = Self.termRange(correction.term, in: observedValue, near: editedRange?.location)
             let currentValue = element.flatMap(Self.value)
             let stillPresent = currentValue == observedValue
-            let exactFrame = stillPresent ? range.flatMap { range in element.flatMap { Self.bounds(for: range, in: $0) } } : nil
+            let exactFrame = stillPresent ? range.flatMap { range in element.flatMap { Self.bounds(for: range, in: $0, includeTextRuns: true) } } : nil
             correctionAnchor = exactFrame ?? editedWordFrame
             correctedWordFrame = stillPresent ? exactFrame ?? editedWordFrame : nil
             onLearn?(correction.term, correction.heardAs)
@@ -321,7 +321,55 @@ final class CorrectionWatcher {
         return matches.min { abs($0.location - location) < abs($1.location - location) }
     }
 
-    private static func bounds(for range: NSRange, in element: AXUIElement) -> NSRect? {
+    private static func bounds(for range: NSRange, in element: AXUIElement, includeTextRuns: Bool = false) -> NSRect? {
+        if let rect = nativeBounds(for: range, in: element),
+           !isSameRect(rect, frame(of: element)) { return rect }
+        // Chromium contenteditable fields expose range bounds on their inner
+        // static text runs. The editor-level API can return the entire field.
+        // Walk only this composer, and only once the correction settles.
+        guard includeTextRuns, let value = value(of: element) else { return nil }
+        let text = value as NSString
+        guard NSMaxRange(range) <= text.length else { return nil }
+        let deadline = Date().addingTimeInterval(0.1)
+        var visited = 0
+        var cursor = 0
+        func search(_ node: AXUIElement, depth: Int) -> NSRect? {
+            guard depth <= 8, visited < 256, Date() < deadline else { return nil }
+            visited += 1
+            if role(of: node) == kAXStaticTextRole, let run = Self.value(of: node), !run.isEmpty {
+                let occurrence = text.range(of: run, range: NSRange(location: cursor, length: text.length - cursor))
+                if occurrence.location != NSNotFound {
+                    cursor = NSMaxRange(occurrence)
+                    if range.location >= occurrence.location, NSMaxRange(range) <= cursor {
+                        let local = NSRange(location: range.location - occurrence.location, length: range.length)
+                        if let rect = nativeBounds(for: local, in: node),
+                           local.length == (run as NSString).length || !isSameRect(rect, frame(of: node)) {
+                            return rect
+                        }
+                    }
+                }
+                return nil
+            }
+            var children: AnyObject?
+            if AXUIElementCopyAttributeValue(node, kAXChildrenAttribute as CFString, &children) == .success,
+               let children = children as? [AXUIElement] {
+                for child in children {
+                    if let rect = search(child, depth: depth + 1) { return rect }
+                    if cursor > NSMaxRange(range) { break }
+                }
+            }
+            return nil
+        }
+        return search(element, depth: 0)
+    }
+
+    private static func isSameRect(_ rect: NSRect, _ other: NSRect?) -> Bool {
+        guard let other else { return false }
+        return abs(rect.minX - other.minX) < 2 && abs(rect.minY - other.minY) < 2
+            && abs(rect.width - other.width) < 2 && abs(rect.height - other.height) < 2
+    }
+
+    private static func nativeBounds(for range: NSRange, in element: AXUIElement) -> NSRect? {
         var cfRange = CFRange(location: range.location, length: range.length)
         guard let parameter = AXValueCreate(.cfRange, &cfRange) else { return nil }
         var result: AnyObject?
@@ -329,7 +377,8 @@ final class CorrectionWatcher {
                                                          parameter, &result) == .success,
               let result, CFGetTypeID(result) == AXValueGetTypeID() else { return nil }
         var rect = CGRect.zero
-        guard AXValueGetValue(result as! AXValue, .cgRect, &rect), rect.width > 0, rect.height > 0 else { return nil }
+        guard AXValueGetValue(result as! AXValue, .cgRect, &rect), rect.width > 0, rect.height > 0,
+              rect.minX.isFinite, rect.minY.isFinite, rect.width.isFinite, rect.height.isFinite else { return nil }
         return screenRect(rect)
     }
 

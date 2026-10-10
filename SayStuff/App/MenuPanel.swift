@@ -244,6 +244,7 @@ private struct DictionaryNoticeView: View {
             Button("Undo", action: undo)
                 .buttonStyle(PillButtonStyle())
         }
+        .fixedSize(horizontal: true, vertical: true)
         .padding(.leading, 12)
         .padding(.trailing, 7)
         .padding(.vertical, 8)
