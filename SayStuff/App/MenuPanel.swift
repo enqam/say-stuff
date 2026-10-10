@@ -97,3 +97,86 @@ final class MenuPanel {
         panel.setFrameTopLeftPoint(NSPoint(x: x, y: buttonFrame.minY - 6))
     }
 }
+
+/// Small notice under the status item ("Added “Cerebras” to Dictionary · Undo").
+/// Separate from the recording pill so it's visible after the pill is gone.
+@MainActor
+final class StatusBanner {
+    private let panel: NSPanel
+    private var hideWork: DispatchWorkItem?
+
+    init() {
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 44),
+                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .popUpMenu
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
+    }
+
+    func show(_ message: String, symbol: String, actionTitle: String? = nil, below button: NSStatusBarButton?,
+              duration: TimeInterval = 5, action: (() -> Void)? = nil) {
+        hideWork?.cancel()
+        let host = NSHostingView(rootView: BannerView(message: message, symbol: symbol, actionTitle: actionTitle) { [weak self] in
+            action?()
+            self?.hide()
+        })
+        panel.contentView = host
+        let size = host.fittingSize
+        panel.setContentSize(size)
+
+        if let button, let window = button.window {
+            let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+            var x = anchor.midX - size.width / 2
+            if let visible = window.screen?.visibleFrame {
+                x = min(max(x, visible.minX + 8), visible.maxX - size.width - 8)
+            }
+            panel.setFrameTopLeftPoint(NSPoint(x: x, y: anchor.minY - 6))
+        }
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { $0.duration = 0.15; panel.animator().alphaValue = 1 }
+
+        let work = DispatchWorkItem { [weak self] in self?.hide() }
+        hideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
+    }
+
+    func hide() {
+        hideWork?.cancel()
+        NSAnimationContext.runAnimationGroup({ $0.duration = 0.2; panel.animator().alphaValue = 0 },
+                                             completionHandler: { [weak self] in
+                                                 Task { @MainActor in self?.panel.orderOut(nil) }
+                                             })
+    }
+}
+
+private struct BannerView: View {
+    let message: String
+    let symbol: String
+    let actionTitle: String?
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+            Text(message)
+                .font(.system(size: 12.5, weight: .medium))
+                .lineLimit(1)
+                .fixedSize()
+            if let actionTitle {
+                Button(actionTitle, action: action)
+                    .buttonStyle(PillButtonStyle())
+            }
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, actionTitle == nil ? 14 : 7)
+        .padding(.vertical, 7)
+        .glassSurface(Capsule())
+    }
+}

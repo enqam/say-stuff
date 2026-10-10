@@ -18,7 +18,9 @@ final class CorrectionWatcher {
 
     private var element: AXUIElement?
     private var pastedWords: [String] = []
-    private var prefix = ""
+    /// Words before the paste: how many, and the last few as an anchor.
+    private var prefixWordCount = 0
+    private var context: [String] = []
     private var lastValue = ""
     private var lastChange = Date()
     private var analyzedValue = ""
@@ -70,7 +72,9 @@ final class CorrectionWatcher {
             }
             log.notice("Watching \(Self.role(of: element), privacy: .public) for corrections")
             self.element = element
-            self.prefix = String(value[..<range.lowerBound])
+            let before = Self.words(String(value[..<range.lowerBound]))
+            self.prefixWordCount = before.count
+            self.context = Array(before.suffix(3))
             self.lastValue = value
             self.analyzedValue = value
             self.lastChange = Date()
@@ -99,15 +103,18 @@ final class CorrectionWatcher {
     // MARK: - Diffing
 
     private func analyze(_ value: String) {
-        // The pasted text starts where it was pasted; everything before it must be untouched.
-        guard value.hasPrefix(prefix) else {
-            log.notice("Text before the paste changed; not comparing")
-            return
+        // Compare the pasted words (plus a few words of context before them) with the same
+        // stretch of the field now. Alignment tolerates edits elsewhere in the field.
+        let all = Self.words(value)
+        let start = min(max(0, prefixWordCount - context.count), all.count)
+        let end = min(all.count, start + context.count + pastedWords.count + 4)
+        let current = Array(all[start..<end])  // a few extra words: ignore text typed after it
+        let edits = Self.replacements(from: context + pastedWords, to: current)
+        if edits.isEmpty {
+            log.notice("No word replacements in the pasted text")
         }
-        let after = Self.words(String(value.dropFirst(prefix.count)))
-        let current = Array(after.prefix(pastedWords.count + 3))  // ignore text typed after it
 
-        for (old, new) in Self.replacements(from: pastedWords, to: current) {
+        for (old, new) in edits {
             let oldPhrase = old.joined(separator: " ")
             let newPhrase = new.joined(separator: " ")
             let learnable = Self.isLearnable(old: oldPhrase, new: newPhrase)

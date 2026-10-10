@@ -18,7 +18,7 @@ final class RecordingHUD {
         static let dotSize: CGFloat = 7
         static let padding: CGFloat = 14
         static let dotGap: CGFloat = 10
-        static let gapAboveDock: CGFloat = 48
+        static let gapAboveDock: CGFloat = 80
         static let frameInterval: CFTimeInterval = 1.0 / 30
         static var barsWidth: CGFloat { CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barGap }
         static var pillWidth: CGFloat { padding * 2 + dotSize + dotGap + barsWidth }

@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private var statusItem: NSStatusItem!
     private var menuPanel: MenuPanel!
+    private let banner = StatusBanner()
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private let updateManager = UpdateManager()
@@ -150,6 +151,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return window.isVisible
         }
         if !othersOpen { NSApp.setActivationPolicy(.accessory) }
+    }
+
+    /// Notice under the menu bar icon, independent of the recording pill.
+    func showBanner(_ message: String, symbol: String, actionTitle: String? = nil, action: (() -> Void)? = nil) {
+        banner.show(message, symbol: symbol, actionTitle: actionTitle, below: statusItem.button, action: action)
     }
 
     func checkForUpdates() {

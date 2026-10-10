@@ -478,8 +478,8 @@ final class DictationController: ObservableObject {
         let existed = dictionary.entries.contains { $0.term.caseInsensitiveCompare(term) == .orderedSame }
         dictionary.add(term: term, heardAs: [heard], learned: true)
         print("[Dictation] Learned \(term) (heard \(heard))")
-        guard !isRecording else { return }
-        hud.flash("Learned \(term) · click to undo", symbol: "character.book.closed", duration: 4) {
+        AppDelegate.shared.showBanner("Added “\(term)” to Dictionary", symbol: "character.book.closed",
+                                      actionTitle: "Undo") {
             dictionary.forget(term: term, heardAs: heard, removeTerm: !existed)
         }
     }
