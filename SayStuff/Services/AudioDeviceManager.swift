@@ -6,6 +6,16 @@ struct AudioDevice: Identifiable, Hashable, Codable {
     let name: String
     let uid: String
 
+    /// Compact label for chips: "Sasha’s AirPods Pro #3" → "AirPods Pro #3", "MacBook Pro Microphone" → "MacBook Pro".
+    var shortName: String {
+        var result = name
+        for apostrophe in ["’s ", "'s "] {
+            if let range = result.range(of: apostrophe) { result = String(result[range.upperBound...]) }
+        }
+        result = result.replacingOccurrences(of: #"\s*Microphone$"#, with: "", options: [.regularExpression, .caseInsensitive])
+        return result.isEmpty ? name : result
+    }
+
     func hash(into hasher: inout Hasher) {
         hasher.combine(uid)
     }

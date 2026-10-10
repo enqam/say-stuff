@@ -48,6 +48,18 @@ final class UsageLedger: ObservableObject {
         records.filter { $0.date >= start }
     }
 
+    /// Monthly cost at the recent pace: spend over the last 7 days (or since the first
+    /// record, if newer) scaled to 30 days. nil until there's spend to extrapolate from.
+    var projectedMonthlyCost: Decimal? {
+        guard let first = records.map(\.date).min() else { return nil }
+        let now = Date()
+        let windowStart = max(first, now.addingTimeInterval(-7 * 86_400))
+        let days = max(now.timeIntervalSince(windowStart) / 86_400, 1)  // at least a day, so one burst isn't ×720
+        let spent = records.filter { $0.date >= windowStart }.reduce(Decimal(0)) { $0 + $1.costUSD }
+        guard spent > 0 else { return nil }
+        return spent / Decimal(days) * 30
+    }
+
     static var startOfMonth: Date {
         Calendar.current.dateInterval(of: .month, for: Date())?.start ?? Date()
     }

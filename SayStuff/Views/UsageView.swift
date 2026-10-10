@@ -12,14 +12,23 @@ struct UsageCard: View {
     var body: some View {
         Card {
             HStack(alignment: .firstTextBaseline) {
-                Text(total(records).usdString)
-                    .font(.mono(28, weight: .semibold))
-                    .foregroundStyle(Theme.text)
-                if records.contains(where: \.isEstimate) {
-                    Text("≈")
-                        .font(.mono(14))
-                        .foregroundStyle(Theme.textTertiary)
-                        .help("Some fal requests are billed by compute time; those use measured request time.")
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(total(records).usdString)
+                            .font(.mono(28, weight: .semibold))
+                            .foregroundStyle(Theme.text)
+                        if records.contains(where: \.isEstimate) {
+                            Text("≈")
+                                .font(.mono(14))
+                                .foregroundStyle(Theme.textTertiary)
+                                .help("Some fal requests are billed by compute time; those use measured request time.")
+                        }
+                    }
+                    if let projected = ledger.projectedMonthlyCost {
+                        Text("≈ \(projected.usdString) / month at your last-7-day pace")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Theme.textTertiary)
+                    }
                 }
                 Spacer()
                 ChipPicker(options: [(false, "This month"), (true, "All time")], selection: $allTime)

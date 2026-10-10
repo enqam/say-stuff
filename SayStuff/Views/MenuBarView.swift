@@ -42,6 +42,9 @@ struct MenuBarView: View {
                 .padding(.top, 9)
             languages
                 .padding(.horizontal, 14)
+                .padding(.top, 9)
+            microphones
+                .padding(.horizontal, 14)
                 .padding(.vertical, 9)
 
             if !history.transcriptions.isEmpty {
@@ -224,6 +227,32 @@ struct MenuBarView: View {
         }
     }
 
+    // MARK: Microphone
+
+    @ObservedObject private var devices = AudioDeviceManager.shared
+
+    private var microphones: some View {
+        HStack(alignment: .top, spacing: 5) {
+            Image(systemName: "mic")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.textTertiary)
+                .frame(width: 16, height: 24)
+                .padding(.trailing, 3)
+            FlowLayout(spacing: 5) {
+                    Chip(title: "Default", isSelected: settings.selectedAudioDeviceUID == nil) {
+                        settingsManager.settings.selectedAudioDeviceUID = nil
+                    }
+                    .help("Follows the system input device")
+                    ForEach(devices.inputDevices) { device in
+                        Chip(title: device.shortName, isSelected: settings.selectedAudioDeviceUID == device.uid) {
+                            settingsManager.settings.selectedAudioDeviceUID = device.uid
+                        }
+                        .help(device.name)
+                    }
+            }
+        }
+    }
+
     // MARK: Language
 
     private var languageChoices: [String] {
@@ -300,12 +329,18 @@ struct MenuBarView: View {
         ledger.records(since: UsageLedger.startOfMonth).reduce(0) { $0 + $1.costUSD }
     }
 
+    private var spendLine: String {
+        guard !ledger.records.isEmpty else { return "No cloud spend yet" }
+        let month = "\(monthCost.usdString) this month"
+        return ledger.projectedMonthlyCost.map { "\(month) · ≈\($0.usdString)/mo" } ?? month
+    }
+
     private var footer: some View {
         HStack(spacing: 0) {
             Button {
                 AppDelegate.shared.openSettings(.cloud)
             } label: {
-                Text(ledger.records.isEmpty ? "No cloud spend yet" : "\(monthCost.usdString) this month")
+                Text(spendLine)
                     .font(.mono(11.5))
                     .foregroundStyle(Theme.textTertiary)
             }
