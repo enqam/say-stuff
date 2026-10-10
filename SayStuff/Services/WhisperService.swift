@@ -15,7 +15,16 @@ final class WhisperService {
         let vocabulary: String?
     }
 
-    func transcribe(_ request: Request) async throws -> String {
+    struct Result {
+        let text: String
+        /// The detected language wasn't one of the candidates, so it was transcribed again.
+        let retriedLanguage: Bool
+        /// The model wasn't loaded yet and this dictation waited for it.
+        let coldStart: Bool
+        let usedServer: Bool
+    }
+
+    func transcribe(_ request: Request) async throws -> Result {
         defer { cleanupTemporaryRecording(request.audioURL) }
         #if DEBUG
         copyModelInputForDiagnostics(request.audioURL)
@@ -26,11 +35,12 @@ final class WhisperService {
         if let serverPath = WhisperServer.binaryPath(nextTo: request.whisperPath) {
             let server = WhisperServer.shared
             await server.beginUse()
+            let cold = await !server.isReady(model: request.modelPath)
             if let base = try? await server.baseURL(binary: serverPath, model: request.modelPath) {
                 do {
-                    let text = try await transcribeWithServer(base, request)
+                    let (text, retried) = try await transcribeWithServer(base, request)
                     await server.endUse()
-                    return text
+                    return Result(text: text, retriedLanguage: retried, coldStart: cold, usedServer: true)
                 } catch {
                     await server.endUse()
                     throw error
@@ -38,7 +48,8 @@ final class WhisperService {
             }
             await server.endUse()
         }
-        return try await transcribeWithCLI(request)
+        let (text, retried) = try await transcribeWithCLI(request)
+        return Result(text: text, retriedLanguage: retried, coldStart: true, usedServer: false)
     }
 
     // MARK: - Server
@@ -49,12 +60,14 @@ final class WhisperService {
         let language_probabilities: [String: Double]?
     }
 
-    private func transcribeWithServer(_ base: URL, _ request: Request) async throws -> String {
+    private func transcribeWithServer(_ base: URL, _ request: Request) async throws -> (String, Bool) {
         let audio = try Data(contentsOf: request.audioURL)
         let forced = request.candidates.count == 1 ? request.candidates[0] : nil
 
         var result = try await infer(base, audio: audio, language: forced ?? "auto", vocabulary: request.vocabulary)
+        var retried = false
         if forced == nil, !LanguageMatch.isAllowed(result.language, in: request.candidates) {
+            retried = true
             // Detected something the user doesn't speak: take the likeliest of their languages.
             let probabilities = try await infer(base, audio: audio, language: "auto", vocabulary: nil, detectOnly: true)
                 .language_probabilities ?? [:]
@@ -62,7 +75,7 @@ final class WhisperService {
             print("[Whisper] Detected \(result.language ?? "?"), retrying as \(best)")
             result = try await infer(base, audio: audio, language: best, vocabulary: request.vocabulary)
         }
-        return Self.clean(result.text)
+        return (Self.clean(result.text), retried)
     }
 
     private func infer(_ base: URL, audio: Data, language: String, vocabulary: String?, detectOnly: Bool = false) async throws -> ServerResult {
@@ -90,19 +103,21 @@ final class WhisperService {
 
     // MARK: - CLI fallback
 
-    private func transcribeWithCLI(_ request: Request) async throws -> String {
+    private func transcribeWithCLI(_ request: Request) async throws -> (String, Bool) {
         guard FileManager.default.isExecutableFile(atPath: request.whisperPath) else { throw WhisperError.binaryNotFound }
         let forced = request.candidates.count == 1 ? request.candidates[0] : nil
 
         var output = try await runCLI(request, language: forced ?? "auto")
+        var retried = false
         if forced == nil, !LanguageMatch.isAllowed(output.detected, in: request.candidates) {
+            retried = true
             // whisper-cli only reports its top guess, so there are no probabilities to rank by.
             // Misdetections are almost always a short non-English phrase, so prefer that.
             let retry = request.candidates.first { $0 != "en" } ?? request.candidates[0]
             print("[Whisper] Detected \(output.detected ?? "?"), retrying as \(retry)")
             output = try await runCLI(request, language: retry)
         }
-        return Self.clean(output.text)
+        return (Self.clean(output.text), retried)
     }
 
     private func runCLI(_ request: Request, language: String) async throws -> (text: String, detected: String?) {
@@ -251,7 +266,6 @@ actor WhisperServer {
     private var model: String?
     private var port: Int = 0
     private var starting: Task<URL, Error>?
-    private let pidKey = "WhisperServerPID"
 
     static func binaryPath(nextTo cliPath: String) -> String? {
         let path = URL(fileURLWithPath: cliPath).deletingLastPathComponent().appendingPathComponent("whisper-server").path
@@ -266,14 +280,21 @@ actor WhisperServer {
         if let starting, self.model == model { return try await starting.value }
 
         stop()
-        killOrphan()
         self.model = model
         port = Self.freePort()
         let port = self.port
 
+        // A small sh watchdog owns the server: it stops it when we terminate it, and within a
+        // second of SayStuff exiting for any reason (quit, crash, kill), so no server is orphaned.
+        let watchdog = """
+        "$@" & server=$!
+        trap 'kill $server 2>/dev/null; exit 0' TERM INT HUP
+        while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null && kill -0 $server 2>/dev/null; do sleep 1; done
+        kill $server 2>/dev/null
+        """
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: binary)
-        process.arguments = [
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", watchdog, "sh", binary,
             "-m", model,
             "--host", "127.0.0.1",
             "--port", String(port),
@@ -283,7 +304,6 @@ actor WhisperServer {
         process.standardError = FileHandle.nullDevice
         try process.run()
         self.process = process
-        UserDefaults.standard.set(Int(process.processIdentifier), forKey: pidKey)
         print("[WhisperServer] Starting on port \(port) with \(URL(fileURLWithPath: model).lastPathComponent)")
 
         let task = Task<URL, Error> {
@@ -325,26 +345,12 @@ actor WhisperServer {
         idleTask = nil
         process?.terminate()
         process = nil
-        UserDefaults.standard.removeObject(forKey: pidKey)
+        model = nil
     }
 
-    /// Synchronous stop for app termination.
-    nonisolated static func terminateNow() {
-        let pid = pid_t(UserDefaults.standard.integer(forKey: "WhisperServerPID"))
-        if pid > 0 { kill(pid, SIGTERM) }
-        UserDefaults.standard.removeObject(forKey: "WhisperServerPID")
-    }
-
-    /// A previous run that crashed may have left its server behind.
-    private func killOrphan() {
-        let pid = pid_t(UserDefaults.standard.integer(forKey: pidKey))
-        guard pid > 0 else { return }
-        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        if proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0,
-           String(cString: buffer).hasSuffix("whisper-server") {
-            kill(pid, SIGTERM)
-        }
-        UserDefaults.standard.removeObject(forKey: pidKey)
+    /// Whether `model` is loaded and ready, i.e. the next request won't wait for a load.
+    func isReady(model: String) -> Bool {
+        process?.isRunning == true && self.model == model && starting == nil
     }
 
     private static func freePort() -> Int {

@@ -86,7 +86,7 @@ final class DictationController: ObservableObject {
     func shutdown() {
         recorder.cancel()
         attenuator.restoreImmediately()
-        WhisperServer.terminateNow()
+        // whisper-server's watchdog stops it once this process exits.
     }
 
     /// Lets the shortcut recorder capture the current combo without triggering dictation.
@@ -207,6 +207,7 @@ final class DictationController: ObservableObject {
         let vocabulary: String?
         let fixWords: (String) -> String
         let local: WhisperService.Request
+        let localModel: WhisperModel
         let localAvailable: Bool
     }
 
@@ -215,6 +216,7 @@ final class DictationController: ObservableObject {
         let note: String?
         let usage: [UsageRecord]
         let source: String
+        var metric: DictationMetric
     }
 
     private func transcribeAndPaste(_ recording: Recording, stoppedAt: Date) {
@@ -238,6 +240,7 @@ final class DictationController: ObservableObject {
                 candidates: settings.candidateLanguages,
                 vocabulary: DictionaryStore.shared.vocabularyPrompt
             ),
+            localModel: settings.modelSize,
             localAvailable: settingsManager.isModelDownloaded(settings.modelSize)
         )
 
@@ -253,8 +256,12 @@ final class DictationController: ObservableObject {
                 self.settle()
             }
             do {
-                let outcome = try await work.value
+                var outcome = try await work.value
                 outcome.usage.forEach(UsageLedger.shared.add)
+                defer {
+                    outcome.metric.totalSeconds = Date().timeIntervalSince(job.stoppedAt)
+                    Telemetry.shared.record(outcome.metric)
+                }
                 let text = self.finalize(outcome.text)
                 guard !text.isEmpty else {
                     self.notify(outcome.note ?? "No speech detected",
@@ -284,9 +291,19 @@ final class DictationController: ObservableObject {
         var notes: [String] = []
         var usage: [UsageRecord] = []
         var text: String
+        var metric = DictationMetric(
+            setup: "Local · \(job.localModel.shortName)",
+            languageMode: job.candidates.count == 1 ? job.candidates[0] : "auto",
+            audioSeconds: job.recording.duration,
+            transcribeSeconds: 0
+        )
+        let transcribeStart = Date()
 
         func transcribeLocally() async throws -> String {
-            try await WhisperService().transcribe(job.local)
+            let result = try await WhisperService().transcribe(job.local)
+            metric.coldStart = result.coldStart
+            metric.retriedLanguage = result.retriedLanguage
+            return result.text
         }
 
         var source = "Local"
@@ -305,6 +322,8 @@ final class DictationController: ObservableObject {
                                              costUSD: GroqTranscriber.cost(audioSeconds: job.recording.duration,
                                                                            requests: result.requests)))
                     source = "Groq"
+                    metric.setup = "Groq"
+                    metric.retriedLanguage = result.requests > 1
                 case .fal:
                     let result = try await FalTranscriber().transcribe(audioURL: job.recording.url, language: job.candidates.count == 1 ? job.candidates[0] : "auto", key: key)
                     text = WhisperService.clean(result.text)
@@ -313,6 +332,7 @@ final class DictationController: ObservableObject {
                     usage.append(UsageRecord(service: .transcription, provider: "fal.ai Wizper v3",
                                              quantity: job.recording.duration, costUSD: cost, isEstimate: isEstimate))
                     source = "fal.ai"
+                    metric.setup = "fal.ai"
                 }
                 try? FileManager.default.removeItem(at: job.recording.url)
             } catch {
@@ -324,7 +344,9 @@ final class DictationController: ObservableObject {
                 }
                 guard job.localAvailable else {
                     // Keep the spend record even though there's nothing to paste.
-                    return Outcome(text: "", note: error.localizedDescription, usage: usage, source: provider.displayName)
+                    metric.setup = provider.displayName
+                    metric.transcribeSeconds = Date().timeIntervalSince(transcribeStart)
+                    return Outcome(text: "", note: error.localizedDescription, usage: usage, source: provider.displayName, metric: metric)
                 }
                 print("[Dictation] Cloud transcription failed, using local: \(error)")
                 if case CloudError.missingKey = error {
@@ -332,15 +354,19 @@ final class DictationController: ObservableObject {
                 } else {
                     notes.append("Cloud unavailable — transcribed on this Mac")
                 }
+                metric.fellBack = true
                 text = try await transcribeLocally()
             }
         } else {
             text = try await transcribeLocally()
         }
 
+        metric.transcribeSeconds = Date().timeIntervalSince(transcribeStart)
         text = job.fixWords(text)
 
         if let profile = job.profile, !text.isEmpty {
+            let formatStart = Date()
+            defer { metric.formatSeconds = Date().timeIntervalSince(formatStart) }
             if let key = job.groqKey {
                 do {
                     let result = try await GroqFormatter().format(text, profile: profile, vocabulary: job.vocabulary, key: key)
@@ -362,7 +388,7 @@ final class DictationController: ObservableObject {
             }
         }
 
-        return Outcome(text: text, note: notes.first, usage: usage, source: source)
+        return Outcome(text: text, note: notes.first, usage: usage, source: source, metric: metric)
     }
 
     private func finalize(_ text: String) -> String {

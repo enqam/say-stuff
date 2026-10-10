@@ -39,6 +39,7 @@
 		B1000010 /* UsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000010 /* UsageView.swift */; };
 		B1000011 /* MenuPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000011 /* MenuPanel.swift */; };
 		B1000012 /* CloudServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000012 /* CloudServices.swift */; };
+		B1000013 /* Telemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000013 /* Telemetry.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -76,6 +77,7 @@
 		B2000010 /* UsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageView.swift; sourceTree = "<group>"; };
 		B2000011 /* MenuPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuPanel.swift; sourceTree = "<group>"; };
 		B2000012 /* CloudServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudServices.swift; sourceTree = "<group>"; };
+		B2000013 /* Telemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Telemetry.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -160,6 +162,7 @@
 		A5000006 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				B2000013 /* Telemetry.swift */,
 				B2000009 /* UsageLedger.swift */,
 				B2000002 /* DictionaryStore.swift */,
 				B2000001 /* KeyCombo.swift */,
@@ -271,6 +274,7 @@
 				B1000010 /* UsageView.swift in Sources */,
 				B1000011 /* MenuPanel.swift in Sources */,
 				B1000012 /* CloudServices.swift in Sources */,
+				B1000013 /* Telemetry.swift in Sources */,
 				A1000001 /* SayStuffApp.swift in Sources */,
 				A1000002 /* AppDelegate.swift in Sources */,
 				A1000003 /* MenuBarView.swift in Sources */,
