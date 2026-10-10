@@ -16,17 +16,21 @@ final class PasteService {
     private var pendingRestore: DispatchWorkItem?
     private var savedItems: [NSPasteboardItem]?
 
-    func paste(_ text: String) -> Outcome {
+    func paste(_ text: String, trace: LatencyTrace? = nil) -> Outcome {
+        trace?.mark("paste.started")
         guard AXIsProcessTrusted() else {
             pasteboard.clearContents()
             pasteboard.setString(text, forType: .string)
             return .copiedOnly
         }
 
+        trace?.mark("paste.permissionChecked")
+
         // If a restore is still pending from a previous paste, keep the original clipboard.
         pendingRestore?.cancel()
         let original = savedItems ?? snapshot()
         savedItems = original
+        trace?.mark("paste.clipboardSnapshotted")
 
         pasteboard.clearContents()
         let item = NSPasteboardItem()
@@ -36,7 +40,9 @@ final class PasteService {
         pasteboard.writeObjects([item])
         let ourChangeCount = pasteboard.changeCount
 
+        trace?.mark("paste.clipboardWritten")
         postCommandV()
+        trace?.mark("paste.eventsPosted")
 
         // Give slow apps (Electron, browsers) time to read the clipboard before restoring it.
         let restore = DispatchWorkItem { [weak self] in

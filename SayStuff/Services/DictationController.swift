@@ -213,14 +213,17 @@ final class DictationController: ObservableObject {
 
     func finish() {
         guard isRecording else { return }
+        let trace = LatencyTrace()
+        trace.mark("stop.pressed")
         let forcedLanguage = recordingLanguage
         endRecordingUI()
+        trace.mark("stop.uiEnded")
         let stoppedAt = Date()
         pendingJobs += 1
         phase = .processing
         hud.showProcessing()
 
-        recorder.stop { [weak self] recording in
+        recorder.stop(trace: trace) { [weak self] recording in
             guard let self else { return }
             guard let recording, recording.containsSpeech, recording.duration >= self.minimumDuration else {
                 if let recording { try? FileManager.default.removeItem(at: recording.url) }
@@ -235,7 +238,7 @@ final class DictationController: ObservableObject {
                 }
                 return
             }
-            self.transcribeAndPaste(recording, stoppedAt: stoppedAt, forcedLanguage: forcedLanguage)
+            self.transcribeAndPaste(recording, stoppedAt: stoppedAt, forcedLanguage: forcedLanguage, trace: trace)
         }
     }
 
@@ -265,6 +268,7 @@ final class DictationController: ObservableObject {
     // MARK: - Pipeline
 
     private struct Job {
+        let trace: LatencyTrace
         let recording: Recording
         let engine: TranscriptionEngine
         let cloudProvider: CloudProvider
@@ -289,10 +293,12 @@ final class DictationController: ObservableObject {
         var metric: DictationMetric
     }
 
-    private func transcribeAndPaste(_ recording: Recording, stoppedAt: Date, forcedLanguage: String?) {
+    private func transcribeAndPaste(_ recording: Recording, stoppedAt: Date, forcedLanguage: String?, trace: LatencyTrace) {
+        trace.mark("job.setupStarted")
         let keys = APIKeys.shared
         let candidates = forcedLanguage.map { [$0] } ?? settings.candidateLanguages
         let job = Job(
+            trace: trace,
             recording: recording,
             engine: settings.engine,
             cloudProvider: settings.cloudProvider,
@@ -315,12 +321,15 @@ final class DictationController: ObservableObject {
             localAvailable: settingsManager.isModelDownloaded(settings.modelSize)
         )
 
+        trace.mark("job.setupFinished")
+
         // Jobs run concurrently, but results are pasted in the order they were spoken.
         let work = Task.detached(priority: .userInitiated) { try await Self.run(job) }
         let previous = pasteChain
 
         pasteChain = Task { [weak self] in
             await previous?.value
+            trace.mark("job.previousPasteFinished")
             guard let self else { return }
             defer {
                 self.pendingJobs -= 1
@@ -328,9 +337,11 @@ final class DictationController: ObservableObject {
             }
             do {
                 var outcome = try await work.value
+                trace.mark("job.resultOnMain")
                 outcome.usage.forEach(UsageLedger.shared.add)
                 defer {
                     outcome.metric.totalSeconds = Date().timeIntervalSince(job.stoppedAt)
+                    trace.mark("job.finished")
                     Telemetry.shared.record(outcome.metric)
                 }
                 let text = self.finalize(outcome.text)
@@ -342,8 +353,10 @@ final class DictationController: ObservableObject {
                 }
                 let latency = Date().timeIntervalSince(job.stoppedAt)
                 print("[Dictation] \(outcome.source): \(String(format: "%.2f", latency))s from stop to paste")
+                trace.mark("history.started")
                 TranscriptionStore.shared.add(text.trimmingCharacters(in: .whitespaces), source: outcome.source, seconds: latency)
-                if self.pasteService.paste(text) == .copiedOnly {
+                trace.mark("history.finished")
+                if self.pasteService.paste(text, trace: trace) == .copiedOnly {
                     self.notify("Copied — press ⌘V to paste", symbol: "doc.on.clipboard", duration: 2.4)
                 } else {
                     if self.settings.learnCorrections { self.corrections.watch(pasted: text) }
@@ -362,6 +375,7 @@ final class DictationController: ObservableObject {
     }
 
     nonisolated private static func run(_ job: Job) async throws -> Outcome {
+        job.trace.mark("job.workerStarted")
         var notes: [String] = []
         var usage: [UsageRecord] = []
         var text: String
@@ -443,6 +457,7 @@ final class DictationController: ObservableObject {
         }
 
         metric.transcribeSeconds = Date().timeIntervalSince(transcribeStart)
+        job.trace.mark("job.transcriptionFinished")
         text = job.fixWords(text)
 
         if let profile = job.profile, !text.isEmpty {
@@ -469,6 +484,7 @@ final class DictationController: ObservableObject {
             }
         }
 
+        job.trace.mark("job.workerFinished")
         return Outcome(text: text, note: notes.first, usage: usage, source: source, metric: metric)
     }
 

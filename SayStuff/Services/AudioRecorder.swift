@@ -5,6 +5,18 @@ import os
 
 private let log = Logger(subsystem: "com.saystuff.app", category: "audio")
 
+/// Monotonic stage timings only; never records audio, clipboard contents, or transcripts.
+struct LatencyTrace: Sendable {
+    private static let logger = Logger(subsystem: "com.saystuff.app", category: "latency")
+    let id = String(UUID().uuidString.prefix(8))
+    private let started = ProcessInfo.processInfo.systemUptime
+
+    func mark(_ stage: String) {
+        let milliseconds = (ProcessInfo.processInfo.systemUptime - started) * 1_000
+        Self.logger.notice("\(id, privacy: .public) \(stage, privacy: .public) \(milliseconds, format: .fixed(precision: 2))ms")
+    }
+}
+
 struct Recording {
     let url: URL
     /// Length of the written audio, after silence trimming.
@@ -82,11 +94,22 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
     }
 
     /// Stops capture and hands back the finished file (nil if nothing was captured).
-    func stop(completion: @escaping (Recording?) -> Void) {
+    func stop(trace: LatencyTrace? = nil, completion: @escaping (Recording?) -> Void) {
+        trace?.mark("recorder.stop.requested")
         sessionQueue.async { [self] in
+            trace?.mark("recorder.sessionQueue.entered")
             session?.stopRunning()
-            let recording = audioQueue.sync { finishFile() }
-            DispatchQueue.main.async { completion(recording) }
+            trace?.mark("recorder.hardwareStopped")
+            let recording = audioQueue.sync {
+                trace?.mark("recorder.audioQueue.entered")
+                let recording = finishFile()
+                trace?.mark("recorder.fileFinalized")
+                return recording
+            }
+            DispatchQueue.main.async {
+                trace?.mark("recorder.mainCallback")
+                completion(recording)
+            }
         }
     }
 
