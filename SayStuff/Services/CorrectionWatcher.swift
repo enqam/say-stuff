@@ -56,7 +56,7 @@ final class CorrectionWatcher {
                 if attempt < 8 {
                     self.attach(text: text, attempt: attempt + 1)
                 } else {
-                    log.info("No readable text field (\(element.map(Self.role) ?? "no focused element", privacy: .public)) in \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?", privacy: .public)")
+                    log.notice("No readable text field (\(element.map(Self.role) ?? "no focused element", privacy: .public)) in \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?", privacy: .public)")
                 }
                 return
             }
@@ -64,11 +64,11 @@ final class CorrectionWatcher {
                 if attempt < 8 {
                     self.attach(text: text, attempt: attempt + 1)
                 } else {
-                    log.info("Pasted text not found in \(Self.role(of: element), privacy: .public) (\(value.count) chars)")
+                    log.notice("Pasted text not found in \(Self.role(of: element), privacy: .public) (\(value.count) chars)")
                 }
                 return
             }
-            log.info("Watching \(Self.role(of: element), privacy: .public) for corrections")
+            log.notice("Watching \(Self.role(of: element), privacy: .public) for corrections")
             self.element = element
             self.prefix = String(value[..<range.lowerBound])
             self.lastValue = value
@@ -101,7 +101,7 @@ final class CorrectionWatcher {
     private func analyze(_ value: String) {
         // The pasted text starts where it was pasted; everything before it must be untouched.
         guard value.hasPrefix(prefix) else {
-            log.info("Text before the paste changed; not comparing")
+            log.notice("Text before the paste changed; not comparing")
             return
         }
         let after = Self.words(String(value.dropFirst(prefix.count)))
@@ -111,7 +111,7 @@ final class CorrectionWatcher {
             let oldPhrase = old.joined(separator: " ")
             let newPhrase = new.joined(separator: " ")
             let learnable = Self.isLearnable(old: oldPhrase, new: newPhrase)
-            log.info("Edit \(oldPhrase, privacy: .public) → \(newPhrase, privacy: .public): \(learnable ? "learn" : "skip", privacy: .public)")
+            log.notice("Edit \(oldPhrase, privacy: .public) → \(newPhrase, privacy: .public): \(learnable ? "learn" : "skip", privacy: .public)")
             guard !learned.contains(newPhrase.lowercased()), learnable else { continue }
             learned.insert(newPhrase.lowercased())
             onLearn?(newPhrase, oldPhrase)

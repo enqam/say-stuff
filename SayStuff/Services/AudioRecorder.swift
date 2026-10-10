@@ -212,7 +212,7 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
         let format = AVAudioFormat(cmAudioFormatDescription: description)
         if loggedFormat != format {
             loggedFormat = format
-            log.info("Capture format: \(format.description, privacy: .public)")
+            log.notice("Capture format: \(format.description, privacy: .public)")
         }
         guard let input = reusableBuffer(&reusableInputBuffer, format: format, frames: frameCount) else { return }
         let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
