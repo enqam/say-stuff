@@ -126,6 +126,8 @@ struct CorrectionLearningSession {
         guard old.lowercased() != new.lowercased(), new.count >= 3 else { return false }
         // Must look like a respelling of what was heard, not a different word.
         guard Self.similarity(old.lowercased(), new.lowercased()) >= 0.45 else { return false }
+        // Keep explicitly listed names distinct (for example Grok and Groq).
+        guard !vocabulary.contains(old.lowercased()) else { return false }
         // Explicit dictionary terms remain learnable even if macOS already knows
         // their spelling. The unknown-word filter protects ordinary grammar edits.
         if vocabulary.contains(new.lowercased()) { return true }

@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// A word the user cares about, plus the ways the speech model tends to mishear it.
 struct DictionaryEntry: Codable, Identifiable, Hashable {
@@ -73,9 +74,14 @@ final class DictionaryStore: ObservableObject {
 
     /// A snapshot of the mishearing fixes, safe to use off the main thread.
     /// Swaps known mishearings for the correct term (whole words, case-insensitive).
-    func replacer() -> (String) -> String {
+    func replacer() -> (String) -> String { Self.replacer(for: entries) }
+
+    /// Explicit words remain valid even if an older entry lists one as an alias.
+    static func replacer(for entries: [DictionaryEntry]) -> (String) -> String {
+        let canonical = Set(entries.map { $0.term.lowercased() })
         let rules: [(NSRegularExpression, String)] = entries.flatMap { entry in
             entry.heardAs.compactMap { variant in
+                guard !canonical.contains(variant.lowercased()) else { return nil }
                 let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: variant) + "(?![\\p{L}\\p{N}])"
                 guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return nil }
                 return (regex, NSRegularExpression.escapedTemplate(for: entry.term))

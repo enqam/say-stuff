@@ -39,6 +39,15 @@ import AppKit
         _ = knownCase.observe("Kcaly", now: now.addingTimeInterval(0.2))
         assert(knownCase.finish() == [Correction(term: "Kcaly", heardAs: "Kali")])
 
+        var homonyms = CorrectionLearningSession(pasted: "Grok", initialValue: "Grok",
+                                                  vocabulary: ["Grok", "Groq"], now: now)!
+        _ = homonyms.observe("Groq", now: now.addingTimeInterval(0.2))
+        assert(homonyms.finish().isEmpty)
+        var unambiguous = CorrectionLearningSession(pasted: "Groc", initialValue: "Groc",
+                                                      vocabulary: ["Grok", "Groq"], now: now)!
+        _ = unambiguous.observe("Groq", now: now.addingTimeInterval(0.2))
+        assert(unambiguous.finish() == [Correction(term: "Groq", heardAs: "Groc")])
+
         var unrelated = CorrectionLearningSession(pasted: "Cerebrus", initialValue: "Cerebrus", now: now)!
         assert(unrelated.observe("Completely different sentence", now: now.addingTimeInterval(0.2)).isEmpty)
         assert(unrelated.observe("", now: now.addingTimeInterval(0.3)).isEmpty)
@@ -64,6 +73,6 @@ import AppKit
         assert(CorrectionWatcher.changedWordRange(from: "😀 Cerebrus", to: "😀 Cerebras") == NSRange(location: 3, length: 8))
         assert(CorrectionWatcher.changedWordRange(from: "Керебрус", to: "Керебрас") == NSRange(location: 0, length: 8))
         assert(CorrectionWatcher.changedWordRange(from: "same", to: "same") == nil)
-        print("PASS: quick send, settled edits, no duplicates, unchanged send, deletion, grammar, unrelated edits, next recording, prefix edits, normalized fields, known dictionary names")
+        print("PASS: quick send, settled edits, no duplicates, unchanged send, deletion, grammar, unrelated edits, next recording, prefix edits, normalized fields, known dictionary names, distinct homonyms")
     }
 }
