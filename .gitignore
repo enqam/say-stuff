@@ -12,3 +12,4 @@ xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 .derivedData/
 .derivedData-dev/
+.design-review/

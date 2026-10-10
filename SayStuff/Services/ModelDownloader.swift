@@ -1,113 +1,76 @@
 import Foundation
 
-class ModelDownloader: ObservableObject {
-    @Published var isDownloading = false
-    @Published var progress: Double = 0
-    @Published var statusMessage = ""
-    @Published var isComplete = false
-    @Published var error: String?
+/// Downloads whisper models. One shared instance so onboarding and Settings show the same progress.
+final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDelegate {
+    static let shared = ModelDownloader()
 
-    private var downloadTask: URLSessionDownloadTask?
+    @Published private(set) var progress: [WhisperModel: Double] = [:]
+    @Published private(set) var errors: [WhisperModel: String] = [:]
+    /// Bumped when a download lands so views re-check what's on disk.
+    @Published private(set) var completedCount = 0
 
-    func download(model: WhisperModel) {
-        isDownloading = true
-        isComplete = false
-        error = nil
-        progress = 0
-        statusMessage = "Connecting..."
+    private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
+    private var tasks: [Int: (task: URLSessionDownloadTask, model: WhisperModel)] = [:]
 
-        let modelDir = SettingsManager.shared.expandedModelDirectory
+    func isDownloading(_ model: WhisperModel) -> Bool {
+        progress[model] != nil
+    }
 
-        do {
-            try FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
-        } catch {
-            isDownloading = false
-            self.error = "Couldn't create models folder: \(error.localizedDescription)"
+    func download(_ model: WhisperModel) {
+        guard !isDownloading(model) else { return }
+        guard !SettingsManager.shared.isModelDownloaded(model) else {
+            completedCount += 1
             return
         }
-
-        let destination = modelDir.appendingPathComponent(model.filename)
-
-        // Check if already downloaded
-        if SettingsManager.shared.isModelDownloaded(model) {
-            isDownloading = false
-            isComplete = true
-            statusMessage = "Model already downloaded"
-            return
-        }
-
-        let session = URLSession(configuration: .default, delegate: DownloadDelegate(downloader: self, destination: destination), delegateQueue: .main)
-
-        downloadTask = session.downloadTask(with: model.downloadURL)
-        downloadTask?.resume()
+        errors[model] = nil
+        progress[model] = 0
+        let task = session.downloadTask(with: model.downloadURL)
+        tasks[task.taskIdentifier] = (task, model)
+        task.resume()
     }
 
-    func cancel() {
-        downloadTask?.cancel()
-        isDownloading = false
-        statusMessage = "Cancelled"
+    func cancel(_ model: WhisperModel) {
+        guard let entry = tasks.first(where: { $0.value.model == model }) else { return }
+        entry.value.task.cancel()
+        tasks[entry.key] = nil
+        progress[model] = nil
     }
 
-    fileprivate func handleProgress(_ totalBytesWritten: Int64, _ totalBytesExpectedToWrite: Int64) {
-        progress = totalBytesExpectedToWrite > 0 ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite) : 0
-        let mbWritten = Double(totalBytesWritten) / 1_000_000
-        let mbTotal = Double(totalBytesExpectedToWrite) / 1_000_000
-        statusMessage = String(format: "Downloading %.1f / %.1f MB", mbWritten, mbTotal)
-    }
-
-    fileprivate func handleCompletion(location: URL?, destination: URL, error: Error?) {
-        isDownloading = false
-
-        if let error = error {
-            self.error = error.localizedDescription
-            return
-        }
-
-        guard let location = location else {
-            self.error = "Download failed: no file"
-            return
-        }
-
-        do {
-            // Remove existing file if present
-            try? FileManager.default.removeItem(at: destination)
-            try FileManager.default.moveItem(at: location, to: destination)
-            isComplete = true
-            statusMessage = "Download complete"
-        } catch {
-            self.error = "Failed to save model: \(error.localizedDescription)"
-        }
-    }
-}
-
-private class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
-    weak var downloader: ModelDownloader?
-    let destination: URL
-
-    init(downloader: ModelDownloader, destination: URL) {
-        self.downloader = downloader
-        self.destination = destination
-    }
+    // MARK: URLSessionDownloadDelegate (main queue)
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64, totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
-        downloader?.handleProgress(totalBytesWritten, totalBytesExpectedToWrite)
+        guard let model = tasks[downloadTask.taskIdentifier]?.model, totalBytesExpectedToWrite > 0 else { return }
+        progress[model] = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        guard let response = downloadTask.response as? HTTPURLResponse,
-              (200...299).contains(response.statusCode) else {
-            downloader?.handleCompletion(location: nil, destination: destination,
-                error: NSError(domain: "ModelDownload", code: 1, userInfo: [NSLocalizedDescriptionKey: "The model server returned an error. Please retry."]))
-            session.finishTasksAndInvalidate()
+        guard let model = tasks[downloadTask.taskIdentifier]?.model else { return }
+        guard let response = downloadTask.response as? HTTPURLResponse, (200...299).contains(response.statusCode) else {
+            errors[model] = "The download server returned an error. Try again."
             return
         }
-        downloader?.handleCompletion(location: location, destination: destination, error: nil)
-        session.finishTasksAndInvalidate()
+
+        let settings = SettingsManager.shared
+        let destination = settings.expandedModelDirectory.appendingPathComponent(model.filename)
+        do {
+            try FileManager.default.createDirectory(at: settings.expandedModelDirectory, withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.moveItem(at: location, to: destination)
+            // First model on a fresh install, or the selected one is missing: switch to the new one.
+            if !settings.isModelDownloaded(settings.settings.modelSize) {
+                settings.settings.modelSize = model
+            }
+            completedCount += 1
+        } catch {
+            errors[model] = "Couldn't save the model: \(error.localizedDescription)"
+        }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error = error {
-            downloader?.handleCompletion(location: nil, destination: destination, error: error)
+        guard let model = tasks.removeValue(forKey: task.taskIdentifier)?.model else { return }
+        progress[model] = nil
+        if let error, (error as NSError).code != NSURLErrorCancelled {
+            errors[model] = error.localizedDescription
         }
     }
 }

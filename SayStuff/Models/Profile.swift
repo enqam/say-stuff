@@ -1,78 +1,158 @@
 import Foundation
 
+/// An output profile: how a transcript is reshaped before it's pasted.
+/// "Raw" isn't a profile — it's the absence of one (`activeProfileID == nil`).
 struct Profile: Codable, Identifiable, Hashable {
     var id: UUID
     var name: String
-    var language: String  // "en", "ru", "auto", etc.
-    var whisperPrompt: String?
-    var formatting: FormattingOptions
+    var symbol: String
+    var summary: String
+    var instructions: String
+    var isBuiltIn: Bool
 
-    static var defaultEnglish: Profile {
+    static let promptID = UUID(uuidString: "6B1F3A52-1C0E-4C55-9A0B-5A11F0000001")!
+    static let formalID = UUID(uuidString: "6B1F3A52-1C0E-4C55-9A0B-5A11F0000002")!
+
+    static let prompt = Profile(
+        id: promptID,
+        name: "Prompt",
+        symbol: "list.bullet",
+        summary: "Organized into clear steps",
+        instructions: """
+        Restructure the dictation into the clearest possible written form, like a prompt for an AI assistant.
+        - When the speaker lists things ("first… then… finally…"), turn them into a numbered list, one item per line.
+        - When the speaker corrects or overrides something later ("actually, don't do it that way, do this"), \
+        keep it as a separate plain line after the list, not as a list item.
+        - Remove filler words and false starts. Keep every requirement and detail; never add new ones.
+        - Output only the rewritten text.
+        """,
+        isBuiltIn: true
+    )
+
+    static let formal = Profile(
+        id: formalID,
+        name: "Formal",
+        symbol: "envelope",
+        summary: "Polished, like an email",
+        instructions: """
+        Rewrite the dictation as clean, formal written language, as if it were part of an email.
+        - Fix punctuation, capitalization and grammar. Remove filler words and false starts.
+        - Keep the speaker's wording and meaning; change as little as possible.
+        - Don't add greetings, sign-offs or content that wasn't said.
+        - Output only the rewritten text.
+        """,
+        isBuiltIn: true
+    )
+
+    static let builtIns: [Profile] = [prompt, formal]
+
+    static func newCustom() -> Profile {
         Profile(
             id: UUID(),
-            name: "English",
-            language: "en",
-            whisperPrompt: nil,
-            formatting: FormattingOptions()
-        )
-    }
-
-    static var defaultAuto: Profile {
-        Profile(
-            id: UUID(),
-            name: "Auto-detect",
-            language: "auto",
-            whisperPrompt: nil,
-            formatting: FormattingOptions()
+            name: "New profile",
+            symbol: "sparkles",
+            summary: "Custom",
+            instructions: "Describe how the dictation should be rewritten.",
+            isBuiltIn: false
         )
     }
 }
 
-struct FormattingOptions: Codable, Hashable {
-    var trimWhitespace: Bool = true
-    var collapseNewlines: Bool = true
-    var addTrailingSpace: Bool = true
+/// A fixed spoken sample used to preview what each profile produces.
+enum ProfileSample {
+    static let spoken = "um so first I want the login page fixed then add dark mode and finally update the readme actually no skip the readme do the changelog instead"
+
+    static let raw = "Um, so first I want the login page fixed, then add dark mode and finally update the readme. Actually no, skip the readme, do the changelog instead."
+
+    static func output(for profile: Profile?) -> String? {
+        guard let profile else { return raw }
+        switch profile.id {
+        case Profile.promptID:
+            return """
+            1. Fix the login page.
+            2. Add dark mode.
+            3. Update the changelog.
+
+            Skip the README; do the changelog instead.
+            """
+        case Profile.formalID:
+            return "First, I would like the login page fixed, then dark mode added, and finally the README updated. Actually, please skip the README and update the changelog instead."
+        default:
+            return nil  // Custom profiles get a live preview once the formatter is connected.
+        }
+    }
 }
 
-class ProfileManager: ObservableObject {
-    static let shared = ProfileManager()
+final class ProfileStore: ObservableObject {
+    static let shared = ProfileStore()
 
-    @Published var profiles: [Profile] = []
+    @Published var profiles: [Profile] = [] {
+        didSet { save() }
+    }
 
     private let fileURL: URL
 
     init() {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let sayStuffDir = appSupport.appendingPathComponent("SayStuff")
-        try? FileManager.default.createDirectory(at: sayStuffDir, withIntermediateDirectories: true)
-        fileURL = sayStuffDir.appendingPathComponent("profiles.json")
-
+        fileURL = AppPaths.support.appendingPathComponent("output-profiles.json")
         load()
     }
 
-    func load() {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            // Create default profiles
-            profiles = [Profile.defaultAuto, Profile.defaultEnglish]
-            save()
-            return
-        }
-
-        do {
-            let data = try Data(contentsOf: fileURL)
-            profiles = try JSONDecoder().decode([Profile].self, from: data)
-        } catch {
-            print("Failed to load profiles: \(error)")
-            profiles = [Profile.defaultAuto, Profile.defaultEnglish]
-        }
+    func profile(id: UUID?) -> Profile? {
+        guard let id else { return nil }
+        return profiles.first { $0.id == id }
     }
 
-    func save() {
+    func index(of id: UUID) -> Int? {
+        profiles.firstIndex { $0.id == id }
+    }
+
+    @discardableResult
+    func addCustom() -> Profile {
+        let profile = Profile.newCustom()
+        profiles.append(profile)
+        return profile
+    }
+
+    func delete(_ id: UUID) {
+        if SettingsManager.shared.settings.activeProfileID == id {
+            SettingsManager.shared.settings.activeProfileID = nil
+        }
+        profiles.removeAll { $0.id == id && !$0.isBuiltIn }
+    }
+
+    func resetBuiltIn(_ id: UUID) {
+        guard let original = Profile.builtIns.first(where: { $0.id == id }),
+              let index = index(of: id) else { return }
+        profiles[index] = original
+    }
+
+    private func load() {
+        var loaded: [Profile] = []
+        if let data = try? Data(contentsOf: fileURL),
+           let decoded = try? JSONDecoder().decode([Profile].self, from: data) {
+            loaded = decoded
+        }
+        // Built-ins always exist and come first; edits to them are kept.
+        let builtIns = Profile.builtIns.map { builtIn in
+            loaded.first { $0.id == builtIn.id } ?? builtIn
+        }
+        profiles = builtIns + loaded.filter { !$0.isBuiltIn }
+    }
+
+    private func save() {
         do {
-            let data = try JSONEncoder().encode(profiles)
-            try data.write(to: fileURL)
+            try JSONEncoder().encode(profiles).write(to: fileURL, options: .atomic)
         } catch {
-            print("Failed to save profiles: \(error)")
+            print("[ProfileStore] Failed to save: \(error)")
         }
     }
+}
+
+enum AppPaths {
+    static let support: URL = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = base.appendingPathComponent("SayStuff", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
 }

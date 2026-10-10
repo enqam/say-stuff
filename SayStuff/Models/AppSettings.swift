@@ -3,86 +3,134 @@ import Carbon.HIToolbox
 
 struct SupportedLanguage: Identifiable {
     let code: String
-    let shortLabel: String
     let name: String
     var id: String { code }
 }
 
 let allSupportedLanguages: [SupportedLanguage] = [
-    SupportedLanguage(code: "auto", shortLabel: "AUTO", name: "Auto-detect"),
-    SupportedLanguage(code: "en", shortLabel: "EN", name: "English"),
-    SupportedLanguage(code: "ru", shortLabel: "RU", name: "Russian"),
-    SupportedLanguage(code: "es", shortLabel: "ES", name: "Spanish"),
-    SupportedLanguage(code: "fr", shortLabel: "FR", name: "French"),
-    SupportedLanguage(code: "de", shortLabel: "DE", name: "German"),
+    SupportedLanguage(code: "auto", name: "Detect automatically"),
+    SupportedLanguage(code: "en", name: "English"),
+    SupportedLanguage(code: "ru", name: "Russian"),
+    SupportedLanguage(code: "uk", name: "Ukrainian"),
+    SupportedLanguage(code: "es", name: "Spanish"),
+    SupportedLanguage(code: "ca", name: "Catalan"),
+    SupportedLanguage(code: "fr", name: "French"),
+    SupportedLanguage(code: "de", name: "German"),
+    SupportedLanguage(code: "it", name: "Italian"),
+    SupportedLanguage(code: "pt", name: "Portuguese"),
+    SupportedLanguage(code: "nl", name: "Dutch"),
+    SupportedLanguage(code: "pl", name: "Polish"),
+    SupportedLanguage(code: "tr", name: "Turkish"),
+    SupportedLanguage(code: "ja", name: "Japanese"),
+    SupportedLanguage(code: "ko", name: "Korean"),
+    SupportedLanguage(code: "zh", name: "Chinese"),
 ]
 
 enum HotkeyMode: String, Codable, CaseIterable {
-    case hold = "hold"
-    case toggle = "toggle"
+    case hold
+    case toggle
 
     var displayName: String {
         switch self {
-        case .hold: return "Hold to Record"
-        case .toggle: return "Toggle (Press to Start/Stop)"
+        case .hold: return "Hold to talk"
+        case .toggle: return "Press to start and stop"
         }
     }
 }
 
-struct AppSettings: Codable {
+enum TranscriptionEngine: String, Codable, CaseIterable {
+    case local
+    case cloud
+
+    var displayName: String {
+        switch self {
+        case .local: return "On this Mac"
+        case .cloud: return "Cloud"
+        }
+    }
+}
+
+struct AppSettings: Codable, Equatable {
+    // Transcription
+    var engine: TranscriptionEngine = .local
     var modelSize: WhisperModel = .small
     var whisperPath: String = "/usr/local/bin/whisper-cli"
     var modelDirectory: String = "~/Library/Application Support/SayStuff/models"
-    var selectedAudioDeviceUID: String? = nil  // nil = system default
+    var language: String = "auto"
+    var addTrailingSpace: Bool = true
+
+    // Output
+    var activeProfileID: UUID? = nil  // nil = raw transcript
+    var learnCorrections: Bool = true
+
+    // Shortcut
     var hotkeyModifiers: [String] = ["cmd", "shift", "option", "control"]
     var hotkeyKey: String = "a"
-    var hotkeyKeyCode: UInt16 = UInt16(kVK_ANSI_A)  // Raw keyCode for F-keys etc.
+    var hotkeyKeyCode: UInt16 = UInt16(kVK_ANSI_A)
     var hotkeyMode: HotkeyMode = .toggle
-    var toggleTimeout: Double = 300.0  // seconds, for toggle mode
-    var showMenuBarIcon: Bool = true
-    var playSounds: Bool = true
-    var hasCompletedOnboarding: Bool = false
-    var showLogoInMenu: Bool = true
-    var menuLanguages: [String] = ["en", "ru", "auto"]
+    var toggleTimeout: Double = 300.0  // seconds; recording stops automatically after this
+
+    // Audio & feedback
+    var selectedAudioDeviceUID: String? = nil  // nil = system default
+    var feedbackSound: String = "Funk"  // empty = no sound
     var attenuateAudio: Bool = true
     var attenuationLevel: Float = 0.25
+    var showScreenBorder: Bool = false
 
-    // Custom decoder that handles missing keys gracefully
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        modelSize = try container.decodeIfPresent(WhisperModel.self, forKey: .modelSize) ?? .largeTurbo
-        whisperPath = try container.decodeIfPresent(String.self, forKey: .whisperPath) ?? "/usr/local/bin/whisper-cli"
-        modelDirectory = try container.decodeIfPresent(String.self, forKey: .modelDirectory) ?? "~/Library/Application Support/SayStuff/models"
-        selectedAudioDeviceUID = try container.decodeIfPresent(String.self, forKey: .selectedAudioDeviceUID)
-        hotkeyModifiers = try container.decodeIfPresent([String].self, forKey: .hotkeyModifiers) ?? ["option", "cmd"]
-        hotkeyKey = try container.decodeIfPresent(String.self, forKey: .hotkeyKey) ?? "v"
-        hotkeyKeyCode = try container.decodeIfPresent(UInt16.self, forKey: .hotkeyKeyCode) ?? UInt16(kVK_ANSI_V)
-        hotkeyMode = try container.decodeIfPresent(HotkeyMode.self, forKey: .hotkeyMode) ?? .hold
-        toggleTimeout = try container.decodeIfPresent(Double.self, forKey: .toggleTimeout) ?? 30.0
-        showMenuBarIcon = try container.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? true
-        playSounds = try container.decodeIfPresent(Bool.self, forKey: .playSounds) ?? true
-        hasCompletedOnboarding = try container.decodeIfPresent(Bool.self, forKey: .hasCompletedOnboarding) ?? false
-        showLogoInMenu = try container.decodeIfPresent(Bool.self, forKey: .showLogoInMenu) ?? true
-        menuLanguages = try container.decodeIfPresent([String].self, forKey: .menuLanguages) ?? ["en", "ru", "auto"]
-        attenuateAudio = try container.decodeIfPresent(Bool.self, forKey: .attenuateAudio) ?? true
-        attenuationLevel = try container.decodeIfPresent(Float.self, forKey: .attenuationLevel) ?? 0.25
+    var hasCompletedOnboarding: Bool = false
+
+    var hotkey: KeyCombo {
+        KeyCombo(modifiers: hotkeyModifiers, keyCode: hotkeyKeyCode, fallbackKey: hotkeyKey)
     }
 
-    // Default initializer
     init() {}
+
+    // Every field falls back to its default, so adding settings never invalidates a saved blob.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = AppSettings()
+        func value<T: Decodable>(_ key: CodingKeys, _ fallback: T) -> T {
+            (try? c.decodeIfPresent(T.self, forKey: key)) ?? fallback
+        }
+        engine = value(.engine, d.engine)
+        modelSize = value(.modelSize, d.modelSize)
+        whisperPath = value(.whisperPath, d.whisperPath)
+        modelDirectory = value(.modelDirectory, d.modelDirectory)
+        language = value(.language, UserDefaults.standard.string(forKey: "selectedLanguage") ?? d.language)
+        addTrailingSpace = value(.addTrailingSpace, d.addTrailingSpace)
+        activeProfileID = value(.activeProfileID, d.activeProfileID)
+        learnCorrections = value(.learnCorrections, d.learnCorrections)
+        hotkeyModifiers = value(.hotkeyModifiers, d.hotkeyModifiers)
+        hotkeyKey = value(.hotkeyKey, d.hotkeyKey)
+        hotkeyKeyCode = value(.hotkeyKeyCode, d.hotkeyKeyCode)
+        hotkeyMode = value(.hotkeyMode, d.hotkeyMode)
+        toggleTimeout = value(.toggleTimeout, d.toggleTimeout)
+        selectedAudioDeviceUID = value(.selectedAudioDeviceUID, d.selectedAudioDeviceUID)
+        attenuateAudio = value(.attenuateAudio, d.attenuateAudio)
+        attenuationLevel = value(.attenuationLevel, d.attenuationLevel)
+        showScreenBorder = value(.showScreenBorder, d.showScreenBorder)
+        hasCompletedOnboarding = value(.hasCompletedOnboarding, d.hasCompletedOnboarding)
+
+        // Older builds stored an on/off `playSounds` flag instead of a sound name.
+        let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+        let legacySoundsOff = (try? legacy.decodeIfPresent(Bool.self, forKey: .playSounds)) == false
+        feedbackSound = value(.feedbackSound, legacySoundsOff ? "" : d.feedbackSound)
+    }
+
+    private enum LegacyKeys: String, CodingKey {
+        case playSounds
+    }
 }
 
-class SettingsManager: ObservableObject {
+final class SettingsManager: ObservableObject {
     static let shared = SettingsManager()
 
     @Published var settings: AppSettings {
         didSet {
+            guard settings != oldValue else { return }
             save()
         }
     }
-
-    @Published var downloadingModels: Set<WhisperModel> = []
-    @Published var downloadProgress: [WhisperModel: Double] = [:]
 
     private let defaults = UserDefaults.standard
     private let settingsKey = "AppSettings"
@@ -136,7 +184,7 @@ class SettingsManager: ObservableObject {
             }
         }
 
-        ensureModelDirectoryExists()
+        try? FileManager.default.createDirectory(at: expandedModelDirectory, withIntermediateDirectories: true)
     }
 
     /// Checks if a directory contains any .bin model files
@@ -183,8 +231,8 @@ class SettingsManager: ObservableObject {
 
         do {
             try process.run()
-            process.waitUntilExit()
             let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
             if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
                !output.isEmpty, fm.isExecutableFile(atPath: output) {
                 return output
@@ -194,48 +242,10 @@ class SettingsManager: ObservableObject {
         return nil
     }
 
-    /// Returns all valid whisper-cli paths found on the system
-    static func findAllWhisperCLIPaths() -> [String] {
-        let fm = FileManager.default
-        var found: [String] = []
-
-        if let bundled = bundledWhisperCLIPath(), fm.isExecutableFile(atPath: bundled) {
-            found.append(bundled)
-        }
-
-        for path in whisperSearchPaths {
-            let expanded = (path as NSString).expandingTildeInPath
-            if fm.isExecutableFile(atPath: expanded) {
-                found.append(expanded)
-            }
-        }
-
-        // Also try `which`
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-        process.arguments = ["whisper-cli"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-               !output.isEmpty, fm.isExecutableFile(atPath: output), !found.contains(output) {
-                found.append(output)
-            }
-        } catch {}
-
-        return found
-    }
-
     private static func bundledWhisperCLIPath() -> String? {
-        let fm = FileManager.default
         guard let resourceURL = Bundle.main.resourceURL else { return nil }
         let path = resourceURL.appendingPathComponent("whisper-cli").path
-        return fm.fileExists(atPath: path) ? path : nil
+        return FileManager.default.fileExists(atPath: path) ? path : nil
     }
 
     private func save() {
@@ -265,60 +275,10 @@ class SettingsManager: ObservableObject {
     }
 
     var expandedModelDirectory: URL {
-        let path = (settings.modelDirectory as NSString).expandingTildeInPath
-        return URL(fileURLWithPath: path)
-    }
-
-    private func ensureModelDirectoryExists() {
-        try? FileManager.default.createDirectory(at: expandedModelDirectory, withIntermediateDirectories: true)
+        URL(fileURLWithPath: (settings.modelDirectory as NSString).expandingTildeInPath)
     }
 
     func isModelDownloaded(_ model: WhisperModel) -> Bool {
-        let path = modelURL(for: model).path
-        return FileManager.default.fileExists(atPath: path)
-    }
-
-    func downloadModel(_ model: WhisperModel) {
-        guard !downloadingModels.contains(model) else { return }
-
-        downloadingModels.insert(model)
-        downloadProgress[model] = 0
-
-        let destinationURL = expandedModelDirectory.appendingPathComponent(model.filename)
-
-        let task = URLSession.shared.downloadTask(with: model.downloadURL) { [weak self] tempURL, response, error in
-            DispatchQueue.main.async {
-                self?.downloadingModels.remove(model)
-                self?.downloadProgress.removeValue(forKey: model)
-
-                guard let tempURL = tempURL, error == nil else {
-                    print("[SettingsManager] Download failed: \(error?.localizedDescription ?? "unknown")")
-                    return
-                }
-
-                do {
-                    // Remove existing file if present
-                    try? FileManager.default.removeItem(at: destinationURL)
-                    try FileManager.default.moveItem(at: tempURL, to: destinationURL)
-                    print("[SettingsManager] Downloaded \(model.displayName) to \(destinationURL.path)")
-                    // Trigger UI update
-                    self?.objectWillChange.send()
-                } catch {
-                    print("[SettingsManager] Failed to save model: \(error)")
-                }
-            }
-        }
-
-        // Observe progress
-        let observation = task.progress.observe(\.fractionCompleted) { [weak self] progress, _ in
-            DispatchQueue.main.async {
-                self?.downloadProgress[model] = progress.fractionCompleted
-            }
-        }
-
-        // Store observation to keep it alive (in practice you'd want to manage this better)
-        objc_setAssociatedObject(task, "progressObservation", observation, .OBJC_ASSOCIATION_RETAIN)
-
-        task.resume()
+        FileManager.default.fileExists(atPath: modelURL(for: model).path)
     }
 }

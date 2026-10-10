@@ -1,0 +1,353 @@
+import AppKit
+import QuartzCore
+
+/// Small floating pill at the bottom of the screen: live waveform while recording,
+/// a shimmer while transcribing, and short status messages.
+///
+/// Pure AppKit + Core Animation. The waveform is ~15 plain CALayers whose heights are set at
+/// most 30×/s; the render server interpolates between updates, so there's no drawing code
+/// and no per-frame view work.
+final class RecordingHUD {
+    private enum Metrics {
+        static let height: CGFloat = 34
+        static let barCount = 15
+        static let barWidth: CGFloat = 3
+        static let barGap: CGFloat = 3
+        static let minBar: CGFloat = 3
+        static let maxBar: CGFloat = 20
+        static let dotSize: CGFloat = 7
+        static let padding: CGFloat = 14
+        static let dotGap: CGFloat = 10
+        static let bottomInset: CGFloat = 26
+        static let frameInterval: CFTimeInterval = 1.0 / 30
+        static var barsWidth: CGFloat { CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barGap }
+        static var pillWidth: CGFloat { padding * 2 + dotSize + dotGap + barsWidth }
+    }
+
+    private enum Mode { case hidden, recording, processing, message }
+
+    private let panel: NSPanel
+    private let pill = NSView()
+    private let dot = CALayer()
+    private let barsLayer = CALayer()
+    private var bars: [CALayer] = []
+    private let label = NSTextField(labelWithString: "")
+    private let icon = NSImageView()
+
+    private var mode: Mode = .hidden
+    private var history = [CGFloat](repeating: 0, count: Metrics.barCount / 2 + 1)  // [0] = newest, drawn in the center
+    private var smoothed: CGFloat = 0
+    private var pendingPeak: CGFloat = 0
+    private var lastFrame: CFTimeInterval = 0
+    private var hideWork: DispatchWorkItem?
+
+    init() {
+        panel = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: Metrics.pillWidth, height: Metrics.height),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: true
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.level = .statusBar
+        panel.ignoresMouseEvents = true
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.animationBehavior = .none
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+
+        pill.wantsLayer = true
+        pill.appearance = NSAppearance(named: .darkAqua)
+        if let layer = pill.layer {
+            layer.backgroundColor = NSColor(white: 0.07, alpha: 0.94).cgColor
+            layer.cornerRadius = Metrics.height / 2
+            layer.cornerCurve = .continuous
+            layer.borderWidth = 0.5
+            layer.borderColor = NSColor(white: 1, alpha: 0.14).cgColor
+        }
+        panel.contentView = pill
+
+        dot.backgroundColor = NSColor.systemRed.cgColor
+        dot.cornerRadius = Metrics.dotSize / 2
+        pill.layer?.addSublayer(dot)
+
+        pill.layer?.addSublayer(barsLayer)
+        for _ in 0..<Metrics.barCount {
+            let bar = CALayer()
+            bar.backgroundColor = NSColor.white.cgColor
+            bar.cornerRadius = Metrics.barWidth / 2
+            barsLayer.addSublayer(bar)
+            bars.append(bar)
+        }
+
+        label.font = .systemFont(ofSize: 12.5, weight: .medium)
+        label.textColor = .white
+        label.isHidden = true
+        pill.addSubview(label)
+
+        icon.contentTintColor = .white
+        icon.symbolConfiguration = .init(pointSize: 12, weight: .semibold)
+        icon.isHidden = true
+        pill.addSubview(icon)
+
+        layoutWaveform()
+    }
+
+    // MARK: - Public (main thread)
+
+    func showRecording() {
+        cancelHide()
+        mode = .recording
+        smoothed = 0
+        pendingPeak = 0
+        history = history.map { _ in 0 }
+        setWaveformVisible(true)
+        layoutWaveform()
+        stopShimmer()
+        dot.backgroundColor = NSColor.systemRed.cgColor
+        pulseDot()
+        present()
+    }
+
+    /// Feed a 0...1 loudness value. Cheap to call for every audio buffer.
+    func push(level: Float) {
+        guard mode == .recording else { return }
+        pendingPeak = max(pendingPeak, CGFloat(level))
+        let now = CACurrentMediaTime()
+        guard now - lastFrame >= Metrics.frameInterval else { return }
+        lastFrame = now
+
+        let target = pendingPeak
+        pendingPeak = 0
+        // Fast attack, slower release reads as "alive" without jitter.
+        smoothed += (target - smoothed) * (target > smoothed ? 0.7 : 0.25)
+        history.removeLast()
+        history.insert(smoothed, at: 0)
+
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(Metrics.frameInterval * 1.5)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeOut))
+        let center = Metrics.barCount / 2
+        for (index, bar) in bars.enumerated() {
+            let distance = abs(index - center)
+            let envelope = 1 - CGFloat(distance) / CGFloat(center + 1) * 0.5
+            setHeight(bar, Metrics.minBar + (Metrics.maxBar - Metrics.minBar) * history[distance] * envelope)
+        }
+        CATransaction.commit()
+    }
+
+    func showProcessing() {
+        cancelHide()
+        guard mode != .processing else { return }
+        mode = .processing
+        setWaveformVisible(true)
+        layoutWaveform()
+        dot.removeAllAnimations()
+        dot.backgroundColor = NSColor(white: 1, alpha: 0.35).cgColor
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(0.15)
+        bars.forEach { setHeight($0, Metrics.minBar + 1) }
+        CATransaction.commit()
+        startShimmer()
+        present()
+    }
+
+    func flash(_ text: String, symbol: String? = nil, duration: TimeInterval = 1.8) {
+        cancelHide()
+        mode = .message
+        stopShimmer()
+        dot.removeAllAnimations()
+        setWaveformVisible(false)
+
+        label.stringValue = text
+        label.sizeToFit()
+        let image = symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
+        icon.image = image
+        icon.isHidden = image == nil
+        label.isHidden = false
+
+        let iconWidth: CGFloat = image == nil ? 0 : 16 + 7
+        let width = Metrics.padding * 2 + iconWidth + ceil(label.frame.width)
+        resize(width: max(width, Metrics.height * 2))
+        let originX = (pill.bounds.width - iconWidth - label.frame.width) / 2
+        icon.frame = NSRect(x: originX, y: (Metrics.height - 16) / 2, width: 16, height: 16)
+        label.frame.origin = NSPoint(x: originX + iconWidth, y: (Metrics.height - label.frame.height) / 2)
+
+        present()
+        scheduleHide(after: duration)
+    }
+
+    func hide() {
+        cancelHide()
+        guard mode != .hidden else { return }
+        mode = .hidden
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.18
+            panel.animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            guard let self, self.mode == .hidden else { return }
+            self.panel.orderOut(nil)
+            self.stopShimmer()
+            self.dot.removeAllAnimations()
+        })
+    }
+
+    // MARK: - Layout
+
+    private func layoutWaveform() {
+        resize(width: Metrics.pillWidth)
+        let midY = Metrics.height / 2
+        dot.frame = CGRect(x: Metrics.padding, y: midY - Metrics.dotSize / 2, width: Metrics.dotSize, height: Metrics.dotSize)
+        barsLayer.frame = CGRect(x: Metrics.padding + Metrics.dotSize + Metrics.dotGap, y: 0, width: Metrics.barsWidth, height: Metrics.height)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (index, bar) in bars.enumerated() {
+            bar.bounds = CGRect(x: 0, y: 0, width: Metrics.barWidth, height: Metrics.minBar)
+            bar.position = CGPoint(x: CGFloat(index) * (Metrics.barWidth + Metrics.barGap) + Metrics.barWidth / 2, y: midY)
+        }
+        CATransaction.commit()
+    }
+
+    private func setWaveformVisible(_ visible: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        dot.isHidden = !visible
+        barsLayer.isHidden = !visible
+        CATransaction.commit()
+        label.isHidden = visible
+        icon.isHidden = visible || icon.image == nil
+    }
+
+    private func setHeight(_ bar: CALayer, _ height: CGFloat) {
+        bar.bounds.size.height = height
+    }
+
+    private func resize(width: CGFloat) {
+        var frame = panel.frame
+        let center = frame.midX
+        frame.size = NSSize(width: width, height: Metrics.height)
+        if panel.isVisible { frame.origin.x = center - width / 2 }
+        panel.setFrame(frame, display: false)
+    }
+
+    private func present() {
+        guard !panel.isVisible || panel.alphaValue < 1 else { return }
+        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
+        if let visible = screen?.visibleFrame {
+            panel.setFrameOrigin(NSPoint(x: visible.midX - panel.frame.width / 2, y: visible.minY + Metrics.bottomInset))
+        }
+        if !panel.isVisible { panel.alphaValue = 0 }
+        panel.orderFrontRegardless()
+
+        let rise = CABasicAnimation(keyPath: "transform.translation.y")
+        rise.fromValue = -6
+        rise.toValue = 0
+        rise.duration = 0.2
+        rise.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        pill.layer?.add(rise, forKey: "rise")
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.12
+            panel.animator().alphaValue = 1
+        }
+    }
+
+    // MARK: - Animations (run on the render server)
+
+    private func pulseDot() {
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1
+        pulse.toValue = 0.35
+        pulse.duration = 0.8
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        dot.add(pulse, forKey: "pulse")
+    }
+
+    private func startShimmer() {
+        let now = CACurrentMediaTime()
+        for (index, bar) in bars.enumerated() {
+            let wave = CABasicAnimation(keyPath: "bounds.size.height")
+            wave.fromValue = Metrics.minBar + 1
+            wave.toValue = Metrics.minBar + 9
+            wave.duration = 0.42
+            wave.autoreverses = true
+            wave.repeatCount = .infinity
+            wave.beginTime = now + Double(index) * 0.055
+            wave.fillMode = .backwards
+            wave.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            bar.add(wave, forKey: "shimmer")
+        }
+    }
+
+    private func stopShimmer() {
+        bars.forEach { $0.removeAnimation(forKey: "shimmer") }
+    }
+
+    private func scheduleHide(after delay: TimeInterval) {
+        let work = DispatchWorkItem { [weak self] in self?.hide() }
+        hideWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func cancelHide() {
+        hideWork?.cancel()
+        hideWork = nil
+    }
+}
+
+#if DEBUG
+extension RecordingHUD {
+    /// Puts the waveform in a fixed state for snapshots (levels from the center outwards).
+    func debugShowRecording(levels: [CGFloat]) {
+        showRecording()
+        dot.removeAllAnimations()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let center = Metrics.barCount / 2
+        for (index, bar) in bars.enumerated() {
+            let distance = abs(index - center)
+            let level = distance < levels.count ? levels[distance] : 0
+            setHeight(bar, Metrics.minBar + (Metrics.maxBar - Metrics.minBar) * level)
+        }
+        CATransaction.commit()
+    }
+
+    func debugRender(to url: URL) {
+        guard let layer = pill.layer else { return }
+        let scale: CGFloat = 2
+        let size = pill.bounds.size
+        guard let context = CGContext(
+            data: nil, width: Int(size.width * scale), height: Int(size.height * scale),
+            bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return }
+        context.scaleBy(x: scale, y: scale)
+        layer.render(in: context)
+        if !label.isHidden {
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+            if !icon.isHidden, let image = icon.image {
+                let tinted = NSImage(size: icon.frame.size, flipped: false) { rect in
+                    image.draw(in: rect)
+                    NSColor.white.set()
+                    rect.fill(using: .sourceAtop)
+                    return true
+                }
+                tinted.draw(in: icon.frame)
+            }
+            (label.stringValue as NSString).draw(at: label.frame.origin, withAttributes: [
+                .font: label.font as Any,
+                .foregroundColor: NSColor.white,
+            ])
+            NSGraphicsContext.restoreGraphicsState()
+        }
+        guard let image = context.makeImage() else { return }
+        let rep = NSBitmapImageRep(cgImage: image)
+        try? rep.representation(using: .png, properties: [:])?.write(to: url)
+    }
+}
+#endif

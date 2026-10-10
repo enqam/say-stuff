@@ -12,10 +12,16 @@ SayStuff is a macOS menu bar app for voice-to-text transcription. Press a hotkey
 
 ## Key Components
 
-- **ScreenBorderOverlay**: Lightweight border around the screen during recording
-- **AudioRecorder**: Captures microphone input
-- **WhisperService**: Local speech-to-text using whisper.cpp
-- **HotkeyManager**: Global hotkey registration
+- **DictationController**: Owns the record → transcribe → paste loop, hotkey handling (hold/toggle, Esc to cancel), sounds and volume ducking. Pastes stay in spoken order.
+- **RecordingHUD**: AppKit/Core Animation pill at the bottom of the screen (live waveform, transcribing shimmer, status messages)
+- **AudioRecorder**: Captures the mic off the main thread, meters levels, trims leading/trailing silence (prevents Whisper "Thank you." hallucinations)
+- **WhisperService**: Local speech-to-text using whisper.cpp's `whisper-cli`
+- **VolumeAttenuator**: Eased fade down/up of system volume while recording, crash-safe
+- **HotkeyManager**: Carbon global hotkeys, raw press/release only
+- **ProfileStore / DictionaryStore / UsageLedger**: Output profiles (Raw = none), custom vocabulary + mishearing fixes, API spend records
+- **ScreenBorderOverlay**: Optional red border around the screen during recording
+
+UI: `MenuBarView` (popover) and `SettingsView` (one window, sidebar panes). Debug builds can render every screen to PNGs: `SAYSTUFF_SNAPSHOT_DIR=/tmp/shots <app>/Contents/MacOS/SayStuff`.
 
 # btca
 

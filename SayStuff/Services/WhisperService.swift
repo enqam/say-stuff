@@ -1,74 +1,56 @@
 import Foundation
 
-class WhisperService {
-    func transcribe(audioURL: URL, profile: Profile, settings: AppSettings) async throws -> String {
-        let settingsManager = SettingsManager.shared
-        let whisperPath = settingsManager.whisperBinaryPath
-        let modelPath = settingsManager.modelPath
+/// Local transcription via whisper.cpp's `whisper-cli`.
+final class WhisperService {
+    struct Request {
+        let audioURL: URL
+        let whisperPath: String
+        let modelPath: String
+        let language: String
+        let vocabulary: String?
+    }
+
+    func transcribe(_ request: Request) async throws -> String {
+        defer { cleanupTemporaryRecording(request.audioURL) }
         #if DEBUG
-        copyModelInputForDiagnostics(audioURL)
+        copyModelInputForDiagnostics(request.audioURL)
         #endif
-        defer {
-            cleanupTemporaryRecording(audioURL)
-        }
 
-        // Build arguments
+        let fm = FileManager.default
+        guard fm.isExecutableFile(atPath: request.whisperPath) else { throw WhisperError.binaryNotFound }
+        guard fm.fileExists(atPath: request.modelPath) else { throw WhisperError.modelNotFound }
+
         var arguments = [
-            "-m", modelPath,
-            "-f", audioURL.path,
-            "-l", profile.language,
-            "-nt",  // No timestamps
-            "-np",  // No prints (progress)
+            "-m", request.modelPath,
+            "-f", request.audioURL.path,
+            "-l", request.language,
+            "-t", String(min(ProcessInfo.processInfo.activeProcessorCount, 8)),
+            "-nt",   // No timestamps
+            "-np",   // No progress output
+            "-sns",  // Suppress non-speech tokens
         ]
-
-        // Add prompt if specified
-        if let prompt = profile.whisperPrompt, !prompt.isEmpty {
-            arguments += ["--prompt", prompt]
-        }
-
-        // Run whisper-cli
-        let output = try await runProcess(path: whisperPath, arguments: arguments)
-
-        // Apply formatting
-        return applyFormatting(output, options: profile.formatting)
-    }
-
-    private func copyModelInputForDiagnostics(_ audioURL: URL) {
-        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-            return
-        }
-
-        let diagnosticsDirectory = appSupport
-            .appendingPathComponent("SayStuff", isDirectory: true)
-            .appendingPathComponent("Diagnostics", isDirectory: true)
-        let diagnosticURL = diagnosticsDirectory.appendingPathComponent("latest-model-input.wav")
-
-        do {
-            try FileManager.default.createDirectory(at: diagnosticsDirectory, withIntermediateDirectories: true)
-            if FileManager.default.fileExists(atPath: diagnosticURL.path) {
-                try FileManager.default.removeItem(at: diagnosticURL)
-            }
-            try FileManager.default.copyItem(at: audioURL, to: diagnosticURL)
-            print("[WhisperService] Model input audio copied to: \(diagnosticURL.path)")
-        } catch {
-            print("[WhisperService] Failed to copy model input audio: \(error)")
-        }
-    }
-
-    private func cleanupTemporaryRecording(_ audioURL: URL) {
-        let temporaryDirectory = FileManager.default.temporaryDirectory.standardizedFileURL.path
-        let standardizedAudioURL = audioURL.standardizedFileURL
-
-        guard standardizedAudioURL.path.hasPrefix(temporaryDirectory),
-              standardizedAudioURL.lastPathComponent.hasPrefix("saystuff_recording_") else {
-            return
+        if let vocabulary = request.vocabulary, !vocabulary.isEmpty {
+            arguments += ["--prompt", vocabulary]
         }
 
         do {
-            try FileManager.default.removeItem(at: standardizedAudioURL)
-        } catch {
-            print("[WhisperService] Failed to remove temporary audio: \(error)")
+            return Self.clean(try await runProcess(path: request.whisperPath, arguments: arguments))
+        } catch WhisperError.processError(let message) where message.contains("-sns") || message.contains("unknown argument") {
+            // Older whisper-cli builds don't know --suppress-nst.
+            arguments.removeAll { $0 == "-sns" }
+            return Self.clean(try await runProcess(path: request.whisperPath, arguments: arguments))
         }
+    }
+
+    /// Joins whisper's per-segment lines and drops non-speech markers like [BLANK_AUDIO].
+    static func clean(_ output: String) -> String {
+        var text = output.replacingOccurrences(
+            of: #"\[[^\]]*\]|\((?:[^)]*\b(?:music|silence|applause|laughs?|blank|inaudible)\b[^)]*)\)"#,
+            with: "",
+            options: [.regularExpression, .caseInsensitive]
+        )
+        text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func runProcess(path: String, arguments: [String]) async throws -> String {
@@ -78,6 +60,7 @@ class WhisperService {
                 process.executableURL = URL(fileURLWithPath: path)
                 process.arguments = arguments
 
+                // stdout via pipe, stderr via file: draining one pipe while the other fills can deadlock.
                 let outputPipe = Pipe()
                 let errorURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
                 FileManager.default.createFile(atPath: errorURL.path, contents: nil)
@@ -109,33 +92,37 @@ class WhisperService {
         }
     }
 
-    private func applyFormatting(_ text: String, options: FormattingOptions) -> String {
-        var result = text
+    private func cleanupTemporaryRecording(_ audioURL: URL) {
+        let temporaryDirectory = FileManager.default.temporaryDirectory.standardizedFileURL.path
+        let url = audioURL.standardizedFileURL
+        guard url.path.hasPrefix(temporaryDirectory),
+              url.lastPathComponent.hasPrefix("saystuff_recording_") else { return }
+        try? FileManager.default.removeItem(at: url)
+    }
 
-        if options.trimWhitespace {
-            result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func copyModelInputForDiagnostics(_ audioURL: URL) {
+        let directory = AppPaths.support.appendingPathComponent("Diagnostics", isDirectory: true)
+        let destination = directory.appendingPathComponent("latest-model-input.wav")
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try? FileManager.default.removeItem(at: destination)
+            try FileManager.default.copyItem(at: audioURL, to: destination)
+        } catch {
+            print("[WhisperService] Failed to copy model input audio: \(error)")
         }
-
-        if options.collapseNewlines {
-            // Replace multiple newlines with single space
-            let regex = try? NSRegularExpression(pattern: "\\n+", options: [])
-            result = regex?.stringByReplacingMatches(
-                in: result,
-                options: [],
-                range: NSRange(location: 0, length: result.utf16.count),
-                withTemplate: " "
-            ) ?? result
-        }
-
-        if options.addTrailingSpace && !result.isEmpty {
-            result += " "
-        }
-
-        return result
     }
 }
 
-enum WhisperError: Error {
-    case processError(String)
+enum WhisperError: LocalizedError {
+    case binaryNotFound
     case modelNotFound
+    case processError(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .binaryNotFound: return "whisper-cli not found"
+        case .modelNotFound: return "Speech model not downloaded"
+        case .processError: return "Transcription failed"
+        }
+    }
 }
