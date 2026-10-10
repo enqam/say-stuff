@@ -361,7 +361,9 @@ final class DictationController: ObservableObject {
                 if self.pasteService.paste(text, trace: trace) == .copiedOnly {
                     self.notify("Copied — press ⌘V to paste", symbol: "doc.on.clipboard", duration: 2.4)
                 } else {
-                    if self.settings.learnCorrections { self.corrections.watch(pasted: text) }
+                    if self.settings.learnCorrections {
+                        self.corrections.watch(pasted: text, vocabulary: DictionaryStore.shared.entries.map(\.term))
+                    }
                     if let note = outcome.note {
                         self.notify(note, symbol: "info.circle", duration: 2.4)
                     } else if self.pendingJobs <= 1, !self.isRecording {

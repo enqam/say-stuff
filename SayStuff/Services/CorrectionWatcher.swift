@@ -14,6 +14,7 @@ struct CorrectionLearningSession {
     }
 
     private let pastedWords: [String]
+    private let vocabulary: Set<String>
     private let prefixWordCount: Int
     private let context: [String]
     private var lastValue: String
@@ -23,12 +24,13 @@ struct CorrectionLearningSession {
     private(set) var finished = false
     private let settleDelay: TimeInterval = 1.5
 
-    init?(pasted: String, initialValue: String, now: Date = Date()) {
+    init?(pasted: String, initialValue: String, vocabulary: [String] = [], now: Date = Date()) {
         let text = Self.normalize(pasted).trimmingCharacters(in: .whitespacesAndNewlines)
         let value = Self.normalize(initialValue)
         let words = Self.words(text)
         guard !words.isEmpty, let range = value.range(of: text, options: .backwards) else { return nil }
         pastedWords = words
+        self.vocabulary = Set(vocabulary.map { $0.lowercased() })
         let before = Self.words(String(value[..<range.lowerBound]))
         prefixWordCount = before.count
         context = Array(before.suffix(3))
@@ -72,7 +74,7 @@ struct CorrectionLearningSession {
             let heard = old.joined(separator: " ")
             let term = new.joined(separator: " ")
             let key = heard.lowercased() + "\u{0}" + term.lowercased()
-            guard !learned.contains(key), Self.isLearnable(old: heard, new: term) else { continue }
+            guard !learned.contains(key), isLearnable(old: heard, new: term) else { continue }
             learned.insert(key)
             result.append(Correction(term: term, heardAs: heard))
         }
@@ -120,13 +122,15 @@ struct CorrectionLearningSession {
         return result
     }
 
-    private static func isLearnable(old: String, new: String) -> Bool {
+    private func isLearnable(old: String, new: String) -> Bool {
         guard old.lowercased() != new.lowercased(), new.count >= 3 else { return false }
         // Must look like a respelling of what was heard, not a different word.
-        guard similarity(old.lowercased(), new.lowercased()) >= 0.45 else { return false }
-        // Names and jargon only: at least one word the system dictionary doesn't know.
+        guard Self.similarity(old.lowercased(), new.lowercased()) >= 0.45 else { return false }
+        // Explicit dictionary terms remain learnable even if macOS already knows
+        // their spelling. The unknown-word filter protects ordinary grammar edits.
+        if vocabulary.contains(new.lowercased()) { return true }
         let checker = NSSpellChecker.shared
-        return words(new).contains { word in
+        return Self.words(new).contains { word in
             checker.checkSpelling(of: word, startingAt: 0).location != NSNotFound
                 || word.contains(where: \.isUppercase) && word != word.capitalized
         }
@@ -170,14 +174,16 @@ final class CorrectionWatcher {
 
     private var element: AXUIElement?
     private var session: CorrectionLearningSession?
+    private var vocabulary: [String] = []
     private var timer: Timer?
     private var observer: AXObserver?
     private var deadline = Date()
     private var generation = UUID()
     private let watchDuration: TimeInterval = 30
 
-    func watch(pasted: String) {
+    func watch(pasted: String, vocabulary: [String] = []) {
         cancel()
+        self.vocabulary = vocabulary
         let text = CorrectionLearningSession.normalize(pasted).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         deadline = Date().addingTimeInterval(watchDuration)
@@ -190,6 +196,7 @@ final class CorrectionWatcher {
             deliver(session.finish())
         }
         session = nil
+        vocabulary = []
         timer?.invalidate()
         timer = nil
         if let observer {
@@ -210,7 +217,7 @@ final class CorrectionWatcher {
         guard generation == expected else { return }
         let focused = Self.focusedElement()
         if let focused, let value = Self.value(of: focused),
-           let session = CorrectionLearningSession(pasted: text, initialValue: value) {
+           let session = CorrectionLearningSession(pasted: text, initialValue: value, vocabulary: vocabulary) {
             element = focused
             self.session = session
             observedValue = value

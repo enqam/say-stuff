@@ -30,6 +30,15 @@ import AppKit
         assert(grammar.observe("their", now: now.addingTimeInterval(0.2)).isEmpty)
         assert(grammar.observe("", now: now.addingTimeInterval(0.3)).isEmpty)
 
+        var knownName = CorrectionLearningSession(pasted: "My app is called Kali.",
+                                                  initialValue: "My app is called Kali.",
+                                                  vocabulary: ["Kcaly"], now: now)!
+        _ = knownName.observe("My app is called Kcaly.", now: now.addingTimeInterval(0.2))
+        assert(knownName.observe("", now: now.addingTimeInterval(0.3)) == [Correction(term: "Kcaly", heardAs: "Kali")])
+        var knownCase = CorrectionLearningSession(pasted: "Kali", initialValue: "Kali", vocabulary: ["KCALY"], now: now)!
+        _ = knownCase.observe("Kcaly", now: now.addingTimeInterval(0.2))
+        assert(knownCase.finish() == [Correction(term: "Kcaly", heardAs: "Kali")])
+
         var unrelated = CorrectionLearningSession(pasted: "Cerebrus", initialValue: "Cerebrus", now: now)!
         assert(unrelated.observe("Completely different sentence", now: now.addingTimeInterval(0.2)).isEmpty)
         assert(unrelated.observe("", now: now.addingTimeInterval(0.3)).isEmpty)
@@ -55,6 +64,6 @@ import AppKit
         assert(CorrectionWatcher.changedWordRange(from: "😀 Cerebrus", to: "😀 Cerebras") == NSRange(location: 3, length: 8))
         assert(CorrectionWatcher.changedWordRange(from: "Керебрус", to: "Керебрас") == NSRange(location: 0, length: 8))
         assert(CorrectionWatcher.changedWordRange(from: "same", to: "same") == nil)
-        print("PASS: quick send, settled edits, no duplicates, unchanged send, deletion, grammar, unrelated edits, next recording, prefix edits, normalized fields")
+        print("PASS: quick send, settled edits, no duplicates, unchanged send, deletion, grammar, unrelated edits, next recording, prefix edits, normalized fields, known dictionary names")
     }
 }
