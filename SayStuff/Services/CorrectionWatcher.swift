@@ -1,5 +1,8 @@
 import AppKit
 import ApplicationServices
+import os
+
+private let log = Logger(subsystem: "com.saystuff.app", category: "corrections")
 
 /// Learns dictionary words from corrections the user makes right after a paste.
 ///
@@ -29,7 +32,7 @@ final class CorrectionWatcher {
     func watch(pasted: String) {
         cancel()
         let text = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
-        pastedWords = Self.words(text)
+        pastedWords = Self.words(Self.normalize(text))
         guard !pastedWords.isEmpty else { return }
         deadline = Date().addingTimeInterval(watchDuration)
         attach(text: text, attempt: 0)
@@ -48,14 +51,24 @@ final class CorrectionWatcher {
     private func attach(text: String, attempt: Int) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }
-            guard let element = Self.focusedElement(), let value = Self.value(of: element) else {
-                if attempt < 5 { self.attach(text: text, attempt: attempt + 1) }
+            let element = Self.focusedElement()
+            guard let element, let value = Self.value(of: element) else {
+                if attempt < 8 {
+                    self.attach(text: text, attempt: attempt + 1)
+                } else {
+                    log.info("No readable text field (\(element.map(Self.role) ?? "no focused element", privacy: .public)) in \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?", privacy: .public)")
+                }
                 return
             }
-            guard let range = value.range(of: text, options: .backwards) else {
-                if attempt < 5 { self.attach(text: text, attempt: attempt + 1) }
+            guard let range = value.range(of: Self.normalize(text), options: .backwards) else {
+                if attempt < 8 {
+                    self.attach(text: text, attempt: attempt + 1)
+                } else {
+                    log.info("Pasted text not found in \(Self.role(of: element), privacy: .public) (\(value.count) chars)")
+                }
                 return
             }
+            log.info("Watching \(Self.role(of: element), privacy: .public) for corrections")
             self.element = element
             self.prefix = String(value[..<range.lowerBound])
             self.lastValue = value
@@ -87,14 +100,19 @@ final class CorrectionWatcher {
 
     private func analyze(_ value: String) {
         // The pasted text starts where it was pasted; everything before it must be untouched.
-        guard value.hasPrefix(prefix) else { return }
+        guard value.hasPrefix(prefix) else {
+            log.info("Text before the paste changed; not comparing")
+            return
+        }
         let after = Self.words(String(value.dropFirst(prefix.count)))
         let current = Array(after.prefix(pastedWords.count + 3))  // ignore text typed after it
 
         for (old, new) in Self.replacements(from: pastedWords, to: current) {
             let oldPhrase = old.joined(separator: " ")
             let newPhrase = new.joined(separator: " ")
-            guard !learned.contains(newPhrase.lowercased()), Self.isLearnable(old: oldPhrase, new: newPhrase) else { continue }
+            let learnable = Self.isLearnable(old: oldPhrase, new: newPhrase)
+            log.info("Edit \(oldPhrase, privacy: .public) → \(newPhrase, privacy: .public): \(learnable ? "learn" : "skip", privacy: .public)")
+            guard !learned.contains(newPhrase.lowercased()), learnable else { continue }
             learned.insert(newPhrase.lowercased())
             onLearn?(newPhrase, oldPhrase)
         }
@@ -185,7 +203,21 @@ final class CorrectionWatcher {
 
     private static func value(of element: AXUIElement) -> String? {
         var value: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success else { return nil }
-        return value as? String
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
+              let string = value as? String else { return nil }
+        return normalize(string)
+    }
+
+    /// Web text fields report spaces as non-breaking spaces and may add zero-width characters.
+    private static func normalize(_ text: String) -> String {
+        text.replacingOccurrences(of: "\u{00A0}", with: " ")
+            .replacingOccurrences(of: "\u{200B}", with: "")
+            .replacingOccurrences(of: "\u{FEFF}", with: "")
+    }
+
+    private static func role(of element: AXUIElement) -> String {
+        var role: AnyObject?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+        return role as? String ?? "?"
     }
 }

@@ -1,6 +1,9 @@
 import AVFoundation
 import CoreAudio
 import Accelerate
+import os
+
+private let log = Logger(subsystem: "com.saystuff.app", category: "audio")
 
 struct Recording {
     let url: URL
@@ -8,6 +11,8 @@ struct Recording {
     let duration: TimeInterval
     /// False when nothing louder than the room's noise floor was heard.
     let containsSpeech: Bool
+    /// Most of the signal was pinned at full scale: the device sent garbage, not speech.
+    var garbled = false
 }
 
 /// Captures the microphone to a mono WAV file.
@@ -37,6 +42,9 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
     private var framesWritten: AVAudioFramePosition = 0
     private var sampleRate: Double = 0
     private var heardSpeech = false
+    private var totalBuffers = 0
+    private var pinnedBuffers = 0
+    private var loggedFormat: AVAudioFormat?
     private var noiseFloor: Float = -60
     /// Silent samples since the last speech, not yet written.
     private var pendingSilence: [Float] = []
@@ -49,8 +57,7 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
     }
 
     // Reusable buffers so the audio callback doesn't allocate
-    private var reusablePCMBuffer: AVAudioPCMBuffer?
-    private var reusableMonoBuffer: AVAudioPCMBuffer?
+    private var reusableInputBuffer: AVAudioPCMBuffer?
     private var reusableWriteBuffer: AVAudioPCMBuffer?
     private var reusableResampledBuffer: AVAudioPCMBuffer?
 
@@ -80,6 +87,15 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
             session?.stopRunning()
             let recording = audioQueue.sync { finishFile() }
             DispatchQueue.main.async { completion(recording) }
+        }
+    }
+
+    /// Drops the configured session so the next recording reconnects to the device from scratch.
+    func resetSession() {
+        sessionQueue.async { [self] in
+            session?.stopRunning()
+            session = nil
+            sessionDeviceID = nil
         }
     }
 
@@ -115,6 +131,18 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
         session.addInput(input)
 
         let output = AVCaptureAudioDataOutput()
+        // Let Core Audio convert to what we write (16 kHz mono float) so no device-specific
+        // decoding happens here; USB mics in particular use formats and split buffers that
+        // hand-decoding got wrong.
+        output.audioSettings = [
+            AVFormatIDKey: kAudioFormatLinearPCM,
+            AVSampleRateKey: Self.outputFormat.sampleRate,
+            AVNumberOfChannelsKey: 1,
+            AVLinearPCMBitDepthKey: 32,
+            AVLinearPCMIsFloatKey: true,
+            AVLinearPCMIsNonInterleaved: false,
+            AVLinearPCMIsBigEndianKey: false,
+        ]
         output.setSampleBufferDelegate(self, queue: audioQueue)
         guard session.canAddOutput(output) else { throw AudioRecorderError.deviceSetupFailed }
         session.addOutput(output)
@@ -136,6 +164,8 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
             .appendingPathComponent("saystuff_recording_\(UUID().uuidString).wav")
         framesWritten = 0
         heardSpeech = false
+        totalBuffers = 0
+        pinnedBuffers = 0
         noiseFloor = -60
         pendingSilence.removeAll(keepingCapacity: true)
         isCapturing = true
@@ -154,7 +184,12 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
             try? FileManager.default.removeItem(at: url)
             return heardSpeech ? nil : Recording(url: url, duration: 0, containsSpeech: false)
         }
-        return Recording(url: url, duration: Double(framesWritten) / sampleRate, containsSpeech: heardSpeech)
+        let garbled = totalBuffers > 5 && pinnedBuffers * 2 > totalBuffers
+        if garbled {
+            log.error("Garbled input: \(self.pinnedBuffers)/\(self.totalBuffers) buffers at full scale")
+        }
+        return Recording(url: url, duration: Double(framesWritten) / sampleRate,
+                         containsSpeech: heardSpeech && !garbled, garbled: garbled)
     }
 
     private func discardFile() {
@@ -168,22 +203,25 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard isCapturing, let url = fileURL else { return }
-        guard let pcmBuffer = createPCMBuffer(from: sampleBuffer) else { return }
+        guard let description = CMSampleBufferGetFormatDescription(sampleBuffer) else { return }
+        let frameCount = AVAudioFrameCount(CMSampleBufferGetNumSamples(sampleBuffer))
+        guard frameCount > 0 else { return }
 
-        let monoBuffer: AVAudioPCMBuffer
-        if pcmBuffer.format.channelCount > 1 {
-            guard let monoFormat = AVAudioFormat(
-                commonFormat: .pcmFormatFloat32,
-                sampleRate: pcmBuffer.format.sampleRate,
-                channels: 1,
-                interleaved: false
-            ), let mono = reusableBuffer(&reusableMonoBuffer, format: monoFormat, frames: pcmBuffer.frameLength) else { return }
-            downmixToMono(source: pcmBuffer, destination: mono)
-            monoBuffer = mono
-        } else {
-            monoBuffer = pcmBuffer
+        // Copy with Core Media (handles non-contiguous block buffers and every PCM layout),
+        // into a buffer of exactly the format the sample buffer says it has.
+        let format = AVAudioFormat(cmAudioFormatDescription: description)
+        if loggedFormat != format {
+            loggedFormat = format
+            log.info("Capture format: \(format.description, privacy: .public)")
         }
-        guard let buffer = resampled(monoBuffer) else { return }
+        guard let input = reusableBuffer(&reusableInputBuffer, format: format, frames: frameCount) else { return }
+        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
+            sampleBuffer, at: 0, frameCount: Int32(frameCount), into: input.mutableAudioBufferList)
+        guard status == noErr else {
+            log.error("Couldn't copy audio samples: \(status)")
+            return
+        }
+        guard let buffer = resampled(input) else { return }
 
         if audioFile == nil {
             sampleRate = Self.outputFormat.sampleRate
@@ -210,6 +248,8 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
 
         var rms: Float = 0
         vDSP_rmsqv(channel, 1, &rms, vDSP_Length(frames.count))
+        totalBuffers += 1
+        if rms > 0.7 { pinnedBuffers += 1 }  // real speech almost never sits near full scale
         let decibels = 20 * log10(max(rms, 0.000_001))
         // -55 dB (room tone) ... -12 dB (loud speech) mapped to 0...1 for the waveform
         onLevel?(min(max((decibels + 55) / 43, 0), 1))
@@ -243,11 +283,17 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
         }
     }
 
+    /// Converts to 16 kHz mono float if the device didn't already deliver that.
     private func resampled(_ input: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
         let output = Self.outputFormat
-        if input.format.sampleRate == output.sampleRate { return input }
+        if input.format.commonFormat == .pcmFormatFloat32,
+           input.format.channelCount == 1,
+           input.format.sampleRate == output.sampleRate {
+            return input
+        }
         if converter == nil || converter?.inputFormat != input.format {
             converter = AVAudioConverter(from: input.format, to: output)
+            converter?.downmix = true
         }
         guard let converter else { return nil }
         let capacity = AVAudioFrameCount(Double(input.frameLength) * output.sampleRate / input.format.sampleRate) + 64
@@ -314,92 +360,6 @@ final class AudioRecorder: NSObject, AVCaptureAudioDataOutputSampleBufferDelegat
         return buffer
     }
 
-    private func downmixToMono(source: AVAudioPCMBuffer, destination: AVAudioPCMBuffer) {
-        let frameCount = Int(source.frameLength)
-        guard frameCount > 0,
-              let sourceChannels = source.floatChannelData,
-              let destinationChannel = destination.floatChannelData?[0] else {
-            return
-        }
-
-        memset(destinationChannel, 0, frameCount * MemoryLayout<Float>.size)
-
-        let channelCount = Int(source.format.channelCount)
-        for channel in 0..<channelCount {
-            vDSP_vadd(destinationChannel, 1, sourceChannels[channel], 1, destinationChannel, 1, vDSP_Length(frameCount))
-        }
-
-        var scale = 1.0 / Float(channelCount)
-        vDSP_vsmul(destinationChannel, 1, &scale, destinationChannel, 1, vDSP_Length(frameCount))
-    }
-
-    private func createPCMBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
-        guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
-              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc)?.pointee else {
-            return nil
-        }
-
-        let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
-        guard frameCount > 0 else { return nil }
-
-        guard let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: asbd.mSampleRate,
-            channels: AVAudioChannelCount(asbd.mChannelsPerFrame),
-            interleaved: false
-        ), let pcmBuffer = reusableBuffer(&reusablePCMBuffer, format: format, frames: AVAudioFrameCount(frameCount)) else {
-            return nil
-        }
-
-        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return nil }
-
-        var lengthAtOffset: Int = 0
-        var totalLength: Int = 0
-        var dataPointer: UnsafeMutablePointer<Int8>?
-
-        let status = CMBlockBufferGetDataPointer(blockBuffer, atOffset: 0, lengthAtOffsetOut: &lengthAtOffset, totalLengthOut: &totalLength, dataPointerOut: &dataPointer)
-        guard status == kCMBlockBufferNoErr, let data = dataPointer else { return nil }
-
-        let channelCount = Int(asbd.mChannelsPerFrame)
-        let nonInterleaved = asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0
-
-        if asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0 {
-            let floatData = UnsafeRawPointer(data).assumingMemoryBound(to: Float.self)
-            for ch in 0..<channelCount {
-                guard let dst = pcmBuffer.floatChannelData?[ch] else { continue }
-                if nonInterleaved {
-                    memcpy(dst, floatData.advanced(by: ch * frameCount), frameCount * MemoryLayout<Float>.size)
-                } else {
-                    cblas_scopy(Int32(frameCount), floatData.advanced(by: ch), Int32(channelCount), dst, 1)
-                }
-            }
-        } else if asbd.mBitsPerChannel == 16 {
-            let int16Data = UnsafeRawPointer(data).assumingMemoryBound(to: Int16.self)
-            var scale: Float = 1.0 / 32768.0
-            for ch in 0..<channelCount {
-                guard let dst = pcmBuffer.floatChannelData?[ch] else { continue }
-                let src = nonInterleaved ? int16Data.advanced(by: ch * frameCount) : int16Data.advanced(by: ch)
-                let stride = nonInterleaved ? 1 : vDSP_Stride(channelCount)
-                vDSP_vflt16(src, stride, dst, 1, vDSP_Length(frameCount))
-                vDSP_vsmul(dst, 1, &scale, dst, 1, vDSP_Length(frameCount))
-            }
-        } else if asbd.mBitsPerChannel == 32 && asbd.mFormatFlags & kAudioFormatFlagIsSignedInteger != 0 {
-            let int32Data = UnsafeRawPointer(data).assumingMemoryBound(to: Int32.self)
-            var scale: Float = 1.0 / 2147483648.0
-            for ch in 0..<channelCount {
-                guard let dst = pcmBuffer.floatChannelData?[ch] else { continue }
-                let src = nonInterleaved ? int32Data.advanced(by: ch * frameCount) : int32Data.advanced(by: ch)
-                let stride = nonInterleaved ? 1 : vDSP_Stride(channelCount)
-                vDSP_vflt32(src, stride, dst, 1, vDSP_Length(frameCount))
-                vDSP_vsmul(dst, 1, &scale, dst, 1, vDSP_Length(frameCount))
-            }
-        } else {
-            print("[AudioRecorder] Unsupported audio format: bits=\(asbd.mBitsPerChannel) flags=\(asbd.mFormatFlags)")
-            return nil
-        }
-
-        return pcmBuffer
-    }
 }
 
 enum AudioRecorderError: LocalizedError {

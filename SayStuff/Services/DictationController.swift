@@ -218,7 +218,13 @@ final class DictationController: ObservableObject {
                 if let recording { try? FileManager.default.removeItem(at: recording.url) }
                 self.pendingJobs -= 1
                 self.settle()
-                self.notify("No speech detected", symbol: "waveform.slash", duration: 1.4)
+                if recording?.garbled == true {
+                    // Reconnect next time; a stale USB session is the usual cause.
+                    self.recorder.resetSession()
+                    self.notify("Mic sent garbled audio — reconnecting", symbol: "exclamationmark.triangle", duration: 2.6)
+                } else {
+                    self.notify("No speech detected", symbol: "waveform.slash", duration: 1.4)
+                }
                 return
             }
             self.transcribeAndPaste(recording, stoppedAt: stoppedAt, forcedLanguage: forcedLanguage)
