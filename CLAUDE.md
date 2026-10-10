@@ -16,7 +16,7 @@ SayStuff is a macOS menu bar app for voice-to-text transcription. Press a hotkey
 - **CloudServices**: Keychain API keys, fal.ai Wizper client + live pricing, Groq `openai/gpt-oss-20b` formatter (temperature 0, few-shot per profile)
 - **RecordingHUD**: AppKit/Core Animation pill at the bottom of the screen (live waveform, transcribing shimmer, status messages)
 - **AudioRecorder**: Captures the mic off the main thread, meters levels, trims leading/trailing silence (prevents Whisper "Thank you." hallucinations)
-- **WhisperService**: Local speech-to-text using whisper.cpp's `whisper-cli`
+- **WhisperService**: Local speech-to-text via a persistent `whisper-server` (model stays loaded; falls back to `whisper-cli`). Auto-detect is limited to the user's spoken languages
 - **VolumeAttenuator**: Eased fade down/up of system volume while recording, crash-safe
 - **HotkeyManager**: Carbon global hotkeys, raw press/release only
 - **ProfileStore / DictionaryStore / UsageLedger**: Output profiles (Raw = none), custom vocabulary + mishearing fixes, API spend records

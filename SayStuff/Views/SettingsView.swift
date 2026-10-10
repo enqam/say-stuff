@@ -273,12 +273,15 @@ struct SpeechPane: View {
                 }
             }
 
-            SettingsSection(title: "Spoken language") {
+            SettingsSection(title: "Languages you speak",
+                            footnote: "Auto picks only among these, so short phrases don't land in the wrong language. Pick one in the menu bar to force it.") {
                 FlowLayout(spacing: 6) {
-                    ForEach(allSupportedLanguages) { language in
-                        Chip(title: language.code == "auto" ? "Detect automatically" : language.name,
-                             isSelected: settingsManager.settings.language == language.code) {
-                            settingsManager.settings.selectLanguage(language.code)
+                    ForEach(allSupportedLanguages.filter { $0.code != "auto" }) { language in
+                        let isOn = settingsManager.settings.spokenLanguages.contains(language.code)
+                        Chip(title: language.name, isSelected: isOn) {
+                            // Keep at least one.
+                            guard !isOn || settingsManager.settings.spokenLanguages.count > 1 else { return }
+                            settingsManager.settings.toggleSpokenLanguage(language.code)
                         }
                     }
                 }

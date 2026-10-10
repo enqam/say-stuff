@@ -59,11 +59,30 @@ final class DictationController: ObservableObject {
             .removeDuplicates()
             .sink { [weak self] combo in self?.registerDictationHotkey(combo) }
             .store(in: &cancellables)
+
+        // Keep the local model loaded while the local engine is selected.
+        settingsManager.$settings
+            .map { [$0.engine.rawValue, $0.modelSize.rawValue, $0.whisperPath, $0.modelDirectory] }
+            .removeDuplicates()
+            .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in self?.updateLocalServer() }
+            .store(in: &cancellables)
+    }
+
+    private func updateLocalServer() {
+        let cli = settingsManager.whisperBinaryPath
+        let model = settingsManager.modelPath
+        if settings.engine == .local {
+            Task { await WhisperServer.shared.prewarm(cliPath: cli, model: model) }
+        } else {
+            Task { await WhisperServer.shared.stop() }  // started again on demand if the cloud falls back
+        }
     }
 
     func shutdown() {
         recorder.cancel()
         attenuator.restoreImmediately()
+        WhisperServer.terminateNow()
     }
 
     /// Lets the shortcut recorder capture the current combo without triggering dictation.
@@ -172,6 +191,7 @@ final class DictationController: ObservableObject {
         let cloudProvider: CloudProvider
         let stoppedAt: Date
         let language: String
+        let candidates: [String]
         let falKey: String?
         let groqKey: String?
         let profile: Profile?
@@ -196,6 +216,7 @@ final class DictationController: ObservableObject {
             cloudProvider: settings.cloudProvider,
             stoppedAt: stoppedAt,
             language: settings.language,
+            candidates: settings.candidateLanguages,
             falKey: keys.key(.fal),
             groqKey: keys.key(.groq),
             profile: ProfileStore.shared.profile(id: settings.activeProfileID),
@@ -205,7 +226,7 @@ final class DictationController: ObservableObject {
                 audioURL: recording.url,
                 whisperPath: settingsManager.whisperBinaryPath,
                 modelPath: settingsManager.modelPath,
-                language: settings.language,
+                candidates: settings.candidateLanguages,
                 vocabulary: DictionaryStore.shared.vocabularyPrompt
             ),
             localAvailable: settingsManager.isModelDownloaded(settings.modelSize)
@@ -268,14 +289,15 @@ final class DictationController: ObservableObject {
                 switch provider {
                 case .groq:
                     let result = try await GroqTranscriber().transcribe(
-                        audioURL: job.recording.url, language: job.language, prompt: job.vocabulary, key: key)
+                        audioURL: job.recording.url, candidates: job.candidates, prompt: job.vocabulary, key: key)
                     text = WhisperService.clean(result.text)
                     usage.append(UsageRecord(service: .transcription, provider: "Groq whisper-large-v3-turbo",
                                              quantity: job.recording.duration,
-                                             costUSD: GroqTranscriber.cost(audioSeconds: job.recording.duration)))
+                                             costUSD: GroqTranscriber.cost(audioSeconds: job.recording.duration,
+                                                                           requests: result.requests)))
                     source = "Groq"
                 case .fal:
-                    let result = try await FalTranscriber().transcribe(audioURL: job.recording.url, language: job.language, key: key)
+                    let result = try await FalTranscriber().transcribe(audioURL: job.recording.url, language: job.candidates.count == 1 ? job.candidates[0] : "auto", key: key)
                     text = WhisperService.clean(result.text)
                     let (cost, isEstimate) = await FalPricing.shared.cost(
                         audioSeconds: job.recording.duration, requestSeconds: result.requestSeconds, key: key)

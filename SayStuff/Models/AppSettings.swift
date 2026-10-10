@@ -77,8 +77,9 @@ struct AppSettings: Codable, Equatable {
     var whisperPath: String = "/usr/local/bin/whisper-cli"
     var modelDirectory: String = "~/Library/Application Support/SayStuff/models"
     var language: String = "auto"
-    /// Languages offered as one-click chips in the menu, most recent first.
-    var recentLanguages: [String] = ["en", "ru"]
+    /// The languages the user speaks. "auto" detects among only these, so a short
+    /// Russian phrase can't come out as Hungarian.
+    var spokenLanguages: [String] = ["en", "ru"]
     var addTrailingSpace: Bool = true
 
     // Output
@@ -120,7 +121,7 @@ struct AppSettings: Codable, Equatable {
         whisperPath = value(.whisperPath, d.whisperPath)
         modelDirectory = value(.modelDirectory, d.modelDirectory)
         language = value(.language, UserDefaults.standard.string(forKey: "selectedLanguage") ?? d.language)
-        recentLanguages = value(.recentLanguages, d.recentLanguages)
+        spokenLanguages = value(.spokenLanguages, d.spokenLanguages)
         addTrailingSpace = value(.addTrailingSpace, d.addTrailingSpace)
         activeProfileID = value(.activeProfileID, d.activeProfileID)
         learnCorrections = value(.learnCorrections, d.learnCorrections)
@@ -137,13 +138,33 @@ struct AppSettings: Codable, Equatable {
         playSounds = value(.playSounds, d.playSounds)
     }
 
-    /// Picks the spoken language and keeps it in the menu's quick chips.
-    mutating func selectLanguage(_ code: String) {
-        language = code
-        guard code != "auto" else { return }
-        recentLanguages.removeAll { $0 == code }
-        recentLanguages.insert(code, at: 0)
-        recentLanguages = Array(recentLanguages.prefix(3))
+    /// Languages the engine may pick from: one if forced, the user's set for auto,
+    /// empty for unrestricted detection.
+    var candidateLanguages: [String] {
+        language == "auto" ? spokenLanguages : [language]
+    }
+
+    mutating func toggleSpokenLanguage(_ code: String) {
+        if let index = spokenLanguages.firstIndex(of: code) {
+            spokenLanguages.remove(at: index)
+            if language == code { language = "auto" }
+        } else {
+            spokenLanguages.append(code)
+        }
+    }
+}
+
+/// Matches a detected language (code like "ru" or whisper's name like "russian") against candidates.
+enum LanguageMatch {
+    static func code(for detected: String) -> String {
+        let value = detected.lowercased()
+        return allSupportedLanguages.first { $0.code == value || $0.name.lowercased() == value }?.code ?? value
+    }
+
+    static func isAllowed(_ detected: String?, in candidates: [String]) -> Bool {
+        guard !candidates.isEmpty else { return true }
+        guard let detected else { return false }
+        return candidates.contains(code(for: detected))
     }
 }
 

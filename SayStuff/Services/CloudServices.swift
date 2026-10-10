@@ -158,37 +158,70 @@ struct GroqTranscriber {
     static let pricePerSecond = Decimal(string: "0.04")! / 3600
     static let minimumBilledSeconds = 10.0
 
-    struct Result { let text: String }
-
-    static func cost(audioSeconds: Double) -> Decimal {
-        pricePerSecond * Decimal(max(audioSeconds, minimumBilledSeconds))
+    struct Result {
+        let text: String
+        /// Requests made (each is billed); more than one when the language had to be re-picked.
+        let requests: Int
     }
 
-    func transcribe(audioURL: URL, language: String, prompt: String?, key: String) async throws -> Result {
-        let boundary = "saystuff-\(UUID().uuidString)"
-        var body = Data()
-        func field(_ name: String, _ value: String) {
-            body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".data(using: .utf8)!)
+    static func cost(audioSeconds: Double, requests: Int = 1) -> Decimal {
+        pricePerSecond * Decimal(max(audioSeconds, minimumBilledSeconds)) * Decimal(requests)
+    }
+
+    /// `candidates`: one code = forced, several = auto among them, empty = unrestricted auto.
+    func transcribe(audioURL: URL, candidates: [String], prompt: String?, key: String) async throws -> Result {
+        let audio = try Data(contentsOf: audioURL)
+        let forced = candidates.count == 1 ? candidates[0] : nil
+        let first = try await request(audio: audio, language: forced, prompt: prompt, key: key)
+        guard forced == nil, !LanguageMatch.isAllowed(first.language, in: candidates) else {
+            return Result(text: first.text, requests: 1)
         }
-        field("model", Self.model)
-        field("response_format", "json")
-        field("temperature", "0")
-        if language != "auto" { field("language", language) }  // omitted = auto-detect
-        if let prompt, !prompt.isEmpty { field("prompt", String(prompt.prefix(600))) }
-        body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\nContent-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
-        body.append(try Data(contentsOf: audioURL))
-        body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
+
+        // Groq doesn't return language probabilities, so transcribe in each of the user's
+        // languages in parallel and keep the one the model is most confident about.
+        print("[Groq] Detected \(first.language ?? "?"), retrying as \(candidates)")
+        let retries = try await withThrowingTaskGroup(of: Transcript.self) { group in
+            for language in candidates {
+                group.addTask { try await request(audio: audio, language: language, prompt: prompt, key: key) }
+            }
+            return try await group.reduce(into: [Transcript]()) { $0.append($1) }
+        }
+        let best = retries.max { $0.confidence < $1.confidence } ?? first
+        return Result(text: best.text, requests: 1 + retries.count)
+    }
+
+    private struct Transcript: Decodable {
+        struct Segment: Decodable {
+            let avg_logprob: Double?
+            let no_speech_prob: Double?
+        }
+        let text: String
+        let language: String?
+        let segments: [Segment]?
+
+        var confidence: Double {
+            let scores = (segments ?? []).compactMap(\.avg_logprob)
+            return scores.isEmpty ? -.infinity : scores.reduce(0, +) / Double(scores.count)
+        }
+    }
+
+    private func request(audio: Data, language: String?, prompt: String?, key: String) async throws -> Transcript {
+        var form = MultipartForm()
+        form.field("model", Self.model)
+        form.field("response_format", "verbose_json")
+        form.field("temperature", "0")
+        if let language { form.field("language", language) }  // omitted = auto-detect
+        if let prompt, !prompt.isEmpty { form.field("prompt", String(prompt.prefix(600))) }
+        form.file("file", filename: "audio.wav", contentType: "audio/wav", data: audio)
 
         var request = URLRequest(url: Self.endpoint)
         request.httpMethod = "POST"
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue(form.contentType, forHTTPHeaderField: "Content-Type")
 
-        let (data, response) = try await CloudSession.shared.upload(for: request, from: body)
+        let (data, response) = try await CloudSession.shared.upload(for: request, from: form.finished)
         try CloudSession.check(response, data: data, provider: .groq)
-
-        struct Output: Decodable { let text: String }
-        return Result(text: try JSONDecoder().decode(Output.self, from: data).text)
+        return try JSONDecoder().decode(Transcript.self, from: data)
     }
 }
 

@@ -186,7 +186,7 @@ struct MenuBarView: View {
     // MARK: Language
 
     private var languageChoices: [String] {
-        var codes = ["auto"] + settings.recentLanguages
+        var codes = ["auto"] + settings.spokenLanguages
         if !codes.contains(settings.language) { codes.append(settings.language) }
         return codes
     }
@@ -199,7 +199,7 @@ struct MenuBarView: View {
                 .padding(.trailing, 3)
             ForEach(languageChoices, id: \.self) { code in
                 Chip(title: code == "auto" ? "Auto" : code.uppercased(), isSelected: settings.language == code) {
-                    settingsManager.settings.selectLanguage(code)
+                    settingsManager.settings.language = code
                 }
             }
             Spacer()
