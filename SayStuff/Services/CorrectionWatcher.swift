@@ -4,125 +4,86 @@ import os
 
 private let log = Logger(subsystem: "com.saystuff.app", category: "corrections")
 
-/// Learns dictionary words from corrections the user makes right after a paste.
-///
-/// After a paste it reads the focused text field through Accessibility (twice a second, for
-/// up to 30 s). Once the user stops typing, it diffs the pasted words against what's there now.
-/// A replaced word is learned when the new spelling resembles the old one and isn't an
-/// ordinary dictionary word (names and jargon: "Cerebrus" → "Cerebras"), so grammar fixes
-/// like "there" → "their" are ignored.
+/// Learns edits to the pasted text. Keep the last observed edit so sending a message
+/// before the typing debounce finishes does not discard its correction.
 @MainActor
-final class CorrectionWatcher {
-    /// Called with (correct term, what was pasted instead).
-    var onLearn: ((String, String) -> Void)?
+struct CorrectionLearningSession {
+    struct Correction: Equatable {
+        let term: String
+        let heardAs: String
+    }
 
-    private var element: AXUIElement?
-    private var pastedWords: [String] = []
-    /// Words before the paste: how many, and the last few as an anchor.
-    private var prefixWordCount = 0
-    private var context: [String] = []
-    private var lastValue = ""
-    private var lastChange = Date()
-    private var analyzedValue = ""
+    private let pastedWords: [String]
+    private let prefixWordCount: Int
+    private let context: [String]
+    private var lastValue: String
+    private var lastChange: Date
+    private var analyzedValue: String
     private var learned: Set<String> = []
-    private var timer: Timer?
-    private var deadline = Date()
-
-    private let watchDuration: TimeInterval = 30
+    private(set) var finished = false
     private let settleDelay: TimeInterval = 1.5
 
-    func watch(pasted: String) {
-        cancel()
-        let text = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
-        pastedWords = Self.words(Self.normalize(text))
-        guard !pastedWords.isEmpty else { return }
-        deadline = Date().addingTimeInterval(watchDuration)
-        attach(text: text, attempt: 0)
-    }
-
-    func cancel() {
-        timer?.invalidate()
-        timer = nil
-        element = nil
-        learned = []
-    }
-
-    // MARK: - Finding the pasted text
-
-    /// Apps apply a paste asynchronously, so look for the text a few times before giving up.
-    private func attach(text: String, attempt: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            guard let self else { return }
-            let element = Self.focusedElement()
-            guard let element, let value = Self.value(of: element) else {
-                if attempt < 8 {
-                    self.attach(text: text, attempt: attempt + 1)
-                } else {
-                    log.notice("No readable text field (\(element.map(Self.role) ?? "no focused element", privacy: .public)) in \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?", privacy: .public)")
-                }
-                return
-            }
-            guard let range = value.range(of: Self.normalize(text), options: .backwards) else {
-                if attempt < 8 {
-                    self.attach(text: text, attempt: attempt + 1)
-                } else {
-                    log.notice("Pasted text not found in \(Self.role(of: element), privacy: .public) (\(value.count) chars)")
-                }
-                return
-            }
-            log.notice("Watching \(Self.role(of: element), privacy: .public) for corrections")
-            self.element = element
-            let before = Self.words(String(value[..<range.lowerBound]))
-            self.prefixWordCount = before.count
-            self.context = Array(before.suffix(3))
-            self.lastValue = value
-            self.analyzedValue = value
-            self.lastChange = Date()
-            self.timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                Task { @MainActor in self?.poll() }
-            }
-        }
-    }
-
-    private func poll() {
-        guard let element, Date() < deadline, let value = Self.value(of: element) else {
-            cancel()
-            return
-        }
-        if value != lastValue {
-            lastValue = value
-            lastChange = Date()
-            return
-        }
-        // Text is stable: analyze once per settled state.
-        guard value != analyzedValue, Date().timeIntervalSince(lastChange) >= settleDelay else { return }
+    init?(pasted: String, initialValue: String, now: Date = Date()) {
+        let text = Self.normalize(pasted).trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = Self.normalize(initialValue)
+        let words = Self.words(text)
+        guard !words.isEmpty, let range = value.range(of: text, options: .backwards) else { return nil }
+        pastedWords = words
+        let before = Self.words(String(value[..<range.lowerBound]))
+        prefixWordCount = before.count
+        context = Array(before.suffix(3))
+        lastValue = value
         analyzedValue = value
-        analyze(value)
+        lastChange = now
     }
 
-    // MARK: - Diffing
+    mutating func observe(_ rawValue: String, now: Date = Date()) -> [Correction] {
+        guard !finished else { return [] }
+        let value = Self.normalize(rawValue)
+        if value != lastValue {
+            if Self.words(value).isEmpty {
+                // Chat composers clear on Send. Evaluate the preceding snapshot, not
+                // the empty field, before ending this paste's learning session.
+                return finish()
+            }
+            lastValue = value
+            lastChange = now
+            return []
+        }
+        guard now.timeIntervalSince(lastChange) >= settleDelay else { return [] }
+        return analyzeLastValue()
+    }
 
-    private func analyze(_ value: String) {
-        // Compare the pasted words (plus a few words of context before them) with the same
-        // stretch of the field now. Alignment tolerates edits elsewhere in the field.
-        let all = Self.words(value)
+    mutating func finish() -> [Correction] {
+        guard !finished else { return [] }
+        finished = true
+        return analyzeLastValue()
+    }
+
+    private mutating func analyzeLastValue() -> [Correction] {
+        guard lastValue != analyzedValue else { return [] }
+        analyzedValue = lastValue
+        let all = Self.words(lastValue)
         let start = min(max(0, prefixWordCount - context.count), all.count)
         let end = min(all.count, start + context.count + pastedWords.count + 4)
-        let current = Array(all[start..<end])  // a few extra words: ignore text typed after it
-        let edits = Self.replacements(from: context + pastedWords, to: current)
-        if edits.isEmpty {
-            log.notice("No word replacements in the pasted text")
-        }
-
+        let edits = Self.replacements(from: context + pastedWords, to: Array(all[start..<end]))
+        var result: [Correction] = []
         for (old, new) in edits {
-            let oldPhrase = old.joined(separator: " ")
-            let newPhrase = new.joined(separator: " ")
-            let learnable = Self.isLearnable(old: oldPhrase, new: newPhrase)
-            log.notice("Edit \(oldPhrase, privacy: .public) → \(newPhrase, privacy: .public): \(learnable ? "learn" : "skip", privacy: .public)")
-            guard !learned.contains(newPhrase.lowercased()), learnable else { continue }
-            learned.insert(newPhrase.lowercased())
-            onLearn?(newPhrase, oldPhrase)
+            let heard = old.joined(separator: " ")
+            let term = new.joined(separator: " ")
+            let key = heard.lowercased() + "\u{0}" + term.lowercased()
+            guard !learned.contains(key), Self.isLearnable(old: heard, new: term) else { continue }
+            learned.insert(key)
+            result.append(Correction(term: term, heardAs: heard))
         }
+        return result
+    }
+
+    /// Web fields may use non-breaking spaces and invisible formatting characters.
+    static func normalize(_ text: String) -> String {
+        text.replacingOccurrences(of: "\u{00A0}", with: " ")
+            .replacingOccurrences(of: "\u{200B}", with: "")
+            .replacingOccurrences(of: "\u{FEFF}", with: "")
     }
 
     /// Word replacements (1–3 words each side) between two word lists, via LCS alignment.
@@ -193,12 +154,112 @@ final class CorrectionWatcher {
             .filter { !$0.isEmpty }
     }
 
-    // MARK: - Accessibility
+}
+
+/// Accessibility reads and notifications stay outside the testable learning session.
+@MainActor
+final class CorrectionWatcher {
+    var onLearn: ((String, String) -> Void)?
+
+    private var element: AXUIElement?
+    private var session: CorrectionLearningSession?
+    private var timer: Timer?
+    private var observer: AXObserver?
+    private var deadline = Date()
+    private var generation = UUID()
+    private let watchDuration: TimeInterval = 30
+
+    func watch(pasted: String) {
+        cancel()
+        let text = CorrectionLearningSession.normalize(pasted).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        deadline = Date().addingTimeInterval(watchDuration)
+        attach(text: text, attempt: 0, generation: generation)
+    }
+
+    func cancel() {
+        generation = UUID()
+        if var session {
+            deliver(session.finish())
+        }
+        session = nil
+        timer?.invalidate()
+        timer = nil
+        if let observer {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+        }
+        observer = nil
+        element = nil
+    }
+
+    /// Check immediately after paste, then retry while the target app applies it.
+    private func attach(text: String, attempt: Int, generation expected: UUID) {
+        guard generation == expected else { return }
+        let focused = Self.focusedElement()
+        if let focused, let value = Self.value(of: focused),
+           let session = CorrectionLearningSession(pasted: text, initialValue: value) {
+            element = focused
+            self.session = session
+            let notifications = observeChanges(in: focused)
+            // Notifications capture quick edits before Send; polling also covers apps
+            // that do not emit Accessibility value-change notifications.
+            timer = Timer.scheduledTimer(withTimeInterval: notifications ? 0.5 : 0.1, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.poll() }
+            }
+            log.notice("Watching \(Self.role(of: focused), privacy: .public) for corrections (notifications: \(notifications))")
+            return
+        }
+        guard attempt < 54, Date() < deadline else {
+            log.notice("Could not attach correction learning to pasted text")
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.attach(text: text, attempt: attempt + 1, generation: expected)
+        }
+    }
+
+    private func observeChanges(in element: AXUIElement) -> Bool {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success else { return false }
+        var created: AXObserver?
+        let status = AXObserverCreate(pid, { _, _, _, context in
+            guard let context else { return }
+            let watcher = Unmanaged<CorrectionWatcher>.fromOpaque(context).takeUnretainedValue()
+            // The observer's source is installed only on the main run loop.
+            MainActor.assumeIsolated { watcher.poll() }
+        }, &created)
+        guard status == .success, let created else { return false }
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        let values = AXObserverAddNotification(created, element, kAXValueChangedNotification as CFString, context) == .success
+        _ = AXObserverAddNotification(created, element, kAXUIElementDestroyedNotification as CFString, context)
+        observer = created
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(created), .commonModes)
+        return values
+    }
+
+    private func poll() {
+        guard let element, Date() < deadline, let value = Self.value(of: element), var session else {
+            cancel()
+            return
+        }
+        let corrections = session.observe(value)
+        self.session = session
+        deliver(corrections)
+        if session.finished { cancel() }
+    }
+
+    private func deliver(_ corrections: [CorrectionLearningSession.Correction]) {
+        for correction in corrections {
+            onLearn?(correction.term, correction.heardAs)
+        }
+        if !corrections.isEmpty {
+            log.notice("Learned \(corrections.count) dictionary correction(s)")
+        }
+    }
 
     private static func focusedElement() -> AXUIElement? {
         let system = AXUIElementCreateSystemWide()
         if let app = NSWorkspace.shared.frontmostApplication {
-            // Electron apps only expose their text to Accessibility when asked.
             AXUIElementSetAttributeValue(AXUIElementCreateApplication(app.processIdentifier),
                                          "AXManualAccessibility" as CFString, kCFBooleanTrue)
         }
@@ -212,14 +273,7 @@ final class CorrectionWatcher {
         var value: AnyObject?
         guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
               let string = value as? String else { return nil }
-        return normalize(string)
-    }
-
-    /// Web text fields report spaces as non-breaking spaces and may add zero-width characters.
-    private static func normalize(_ text: String) -> String {
-        text.replacingOccurrences(of: "\u{00A0}", with: " ")
-            .replacingOccurrences(of: "\u{200B}", with: "")
-            .replacingOccurrences(of: "\u{FEFF}", with: "")
+        return string
     }
 
     private static func role(of element: AXUIElement) -> String {
