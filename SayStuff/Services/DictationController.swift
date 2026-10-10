@@ -205,7 +205,7 @@ final class DictationController: ObservableObject {
         recorder.start(deviceUID: settings.selectedAudioDeviceUID) { [weak self] error in
             guard let self, let error else { return }
             print("[Dictation] Failed to start recording: \(error)")
-            self.endRecordingUI()
+            self.endRecordingUI(nextPhase: self.pendingJobs > 0 ? .processing : .idle)
             self.settle()
             self.hud.flash(error.localizedDescription, symbol: "mic.slash")
         }
@@ -216,11 +216,12 @@ final class DictationController: ObservableObject {
         let trace = LatencyTrace()
         trace.mark("stop.pressed")
         let forcedLanguage = recordingLanguage
-        endRecordingUI()
-        trace.mark("stop.uiEnded")
         let stoppedAt = Date()
         pendingJobs += 1
-        phase = .processing
+        // Transition directly to processing: a transient idle phase would reset the
+        // status icon before the capture callback or paste could reach the main thread.
+        endRecordingUI(nextPhase: .processing)
+        trace.mark("stop.uiEnded")
         hud.showProcessing()
 
         recorder.stop(trace: trace) { [weak self] recording in
@@ -242,8 +243,8 @@ final class DictationController: ObservableObject {
         }
     }
 
-    private func endRecordingUI() {
-        phase = .idle
+    private func endRecordingUI(nextPhase: Phase) {
+        phase = nextPhase
         recordingLanguage = nil
         autoStopTimer?.invalidate()
         autoStopTimer = nil

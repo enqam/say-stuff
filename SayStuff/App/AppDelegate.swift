@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let updateManager = UpdateManager()
     private let dictation = DictationController.shared
     private var cancellables = Set<AnyCancellable>()
+    private var statusIconShowsRecording = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
@@ -69,14 +70,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let button = statusItem.button else { return }
         switch phase {
         case .idle:
+            guard statusIconShowsRecording else { return }
+            statusIconShowsRecording = false
             button.contentTintColor = nil
-            button.alphaValue = 1
         case .recording:
+            guard !statusIconShowsRecording else { return }
+            statusIconShowsRecording = true
             button.contentTintColor = Theme.nsAccent
-            button.alphaValue = 1
         case .processing:
-            button.contentTintColor = nil
-            button.alphaValue = 0.5
+            // Updating the status-item scene can synchronously wait on the graphics
+            // server. Keep its recording appearance until the result has been pasted;
+            // the HUD shows processing without delaying the main-thread handoffs.
+            break
         }
     }
 
