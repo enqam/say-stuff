@@ -30,15 +30,15 @@ enum HotkeyMode: String, Codable, CaseIterable {
 }
 
 struct AppSettings: Codable {
-    var modelSize: WhisperModel = .largeTurbo
+    var modelSize: WhisperModel = .small
     var whisperPath: String = "/usr/local/bin/whisper-cli"
     var modelDirectory: String = "~/Library/Application Support/SayStuff/models"
     var selectedAudioDeviceUID: String? = nil  // nil = system default
-    var hotkeyModifiers: [String] = ["option", "cmd"]
-    var hotkeyKey: String = "v"
-    var hotkeyKeyCode: UInt16 = UInt16(kVK_ANSI_V)  // Raw keyCode for F-keys etc.
-    var hotkeyMode: HotkeyMode = .hold
-    var toggleTimeout: Double = 30.0  // seconds, for toggle mode
+    var hotkeyModifiers: [String] = ["cmd", "shift", "option", "control"]
+    var hotkeyKey: String = "a"
+    var hotkeyKeyCode: UInt16 = UInt16(kVK_ANSI_A)  // Raw keyCode for F-keys etc.
+    var hotkeyMode: HotkeyMode = .toggle
+    var toggleTimeout: Double = 300.0  // seconds, for toggle mode
     var showMenuBarIcon: Bool = true
     var playSounds: Bool = true
     var hasCompletedOnboarding: Bool = false
@@ -115,7 +115,9 @@ class SettingsManager: ObservableObject {
 
         // Auto-locate whisper-cli if saved path doesn't exist
         let expandedWhisperPath = (settings.whisperPath as NSString).expandingTildeInPath
-        if !FileManager.default.isExecutableFile(atPath: expandedWhisperPath) {
+        if let bundled = Self.bundledWhisperCLIPath(), FileManager.default.isExecutableFile(atPath: bundled) {
+            settings.whisperPath = bundled
+        } else if !FileManager.default.isExecutableFile(atPath: expandedWhisperPath) {
             if let foundPath = Self.findWhisperCLI() {
                 settings.whisperPath = foundPath
                 print("[SettingsManager] Auto-located whisper-cli at: \(foundPath)")
@@ -242,9 +244,21 @@ class SettingsManager: ObservableObject {
         }
     }
 
-    var modelPath: String {
-        expandedModelDirectory.appendingPathComponent(settings.modelSize.filename).path
+    func modelURL(for model: WhisperModel) -> URL {
+        let local = expandedModelDirectory.appendingPathComponent(model.filename)
+        if FileManager.default.fileExists(atPath: local.path) { return local }
+        if let bundled = Bundle.main.url(forResource: model.filename, withExtension: nil) {
+            return bundled
+        }
+        for directory in Self.modelSearchPaths {
+            let candidate = URL(fileURLWithPath: (directory as NSString).expandingTildeInPath)
+                .appendingPathComponent(model.filename)
+            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+        }
+        return local
     }
+
+    var modelPath: String { modelURL(for: settings.modelSize).path }
 
     var whisperBinaryPath: String {
         (settings.whisperPath as NSString).expandingTildeInPath
@@ -260,7 +274,7 @@ class SettingsManager: ObservableObject {
     }
 
     func isModelDownloaded(_ model: WhisperModel) -> Bool {
-        let path = expandedModelDirectory.appendingPathComponent(model.filename).path
+        let path = modelURL(for: model).path
         return FileManager.default.fileExists(atPath: path)
     }
 

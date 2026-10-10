@@ -53,7 +53,7 @@ class ProfileManager: ObservableObject {
     func load() {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             // Create default profiles
-            profiles = [Profile.defaultEnglish, Profile.defaultAuto]
+            profiles = [Profile.defaultAuto, Profile.defaultEnglish]
             save()
             return
         }
@@ -63,7 +63,7 @@ class ProfileManager: ObservableObject {
             profiles = try JSONDecoder().decode([Profile].self, from: data)
         } catch {
             print("Failed to load profiles: \(error)")
-            profiles = [Profile.defaultEnglish, Profile.defaultAuto]
+            profiles = [Profile.defaultAuto, Profile.defaultEnglish]
         }
     }
 

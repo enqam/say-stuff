@@ -10,3 +10,5 @@ releases/
 xcuserdata/
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
+.derivedData/
+.derivedData-dev/

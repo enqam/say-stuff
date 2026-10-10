@@ -5,17 +5,18 @@ SayStuff is a macOS menu bar app for local voice-to-text. Hold a hotkey to recor
 ## Requirements
 
 - macOS 13+
-- `whisper-cli` from whisper.cpp (or another compatible build)
-- At least one Whisper model file (.bin)
+- Apple Silicon for the Small self-contained release (M1 or newer)
+- The Small DMG includes whisper-cli and the multilingual Small model.
 
 ## Install (Recommended for Non‑Technical Users)
 
 1. Download the latest `SayStuff-<version>.dmg` from GitHub Releases.
 2. Open the DMG and drag SayStuff into `/Applications`.
 3. On first launch, if macOS warns about an unidentified developer:
-   - Right‑click SayStuff in `/Applications` → `Open` → `Open`.
+   - After trying to open it, go to System Settings → Privacy & Security → Open Anyway.
+4. Grant Microphone and Accessibility access in onboarding. No developer tools are needed.
 
-## Share With a Friend (Fastest)
+## Legacy release script (requires dependency audit)
 
 1. On your Mac, run `./scripts/release.sh <version>` (example: `./scripts/release.sh 0.5.1`).
 2. Send your friend `releases/SayStuff-<version>.dmg`.
@@ -40,9 +41,11 @@ Notes:
 
 ## Usage
 
-- Hold the hotkey (default: Option+Command+V) to record.
+- Press Control+Option+Shift+Command+A to start recording; press again to finish.
+- With Raycast Hyper Key on Caps Lock including Shift, use Caps Lock+A.
+- Quit old Hammerspoon dictation if it uses the same shortcut.
 - A red screen border shows while recording.
-- Release to transcribe and paste.
+- New installations use Small and automatic language detection. Existing settings are preserved.
 
 ## Troubleshooting
 
@@ -53,3 +56,7 @@ Notes:
 ## License
 
 MIT
+
+## Self-contained Small packaging
+
+See `delivery/BUILD.md` for the tested Apple Silicon build and `delivery/START-HERE.txt` for Russian first-run instructions. `scripts/package-small.sh` refuses to package a Whisper binary with non-system dynamic dependencies.

@@ -1,10 +1,11 @@
 import SwiftUI
+import AVFoundation
 
 struct OnboardingView: View {
     @StateObject private var downloader = ModelDownloader()
     @ObservedObject var settingsManager = SettingsManager.shared
-    @State private var currentStep = 0
-    @State private var selectedModel: WhisperModel = .largeTurbo
+    @State private var currentStep = SettingsManager.shared.isModelDownloaded(SettingsManager.shared.settings.modelSize) ? 3 : 0
+    @State private var selectedModel: WhisperModel = .small
 
     var onComplete: () -> Void
 
@@ -49,25 +50,25 @@ struct WelcomeStep: View {
                 .font(.system(size: 80))
                 .foregroundColor(.accentColor)
 
-            Text("Welcome to SayStuff")
+            Text("SayStuff")
                 .font(.largeTitle)
                 .fontWeight(.bold)
 
-            Text("Push-to-talk voice transcription for your Mac")
+            Text("Record speech and paste it as text")
                 .font(.title3)
                 .foregroundColor(.secondary)
 
             Spacer()
 
             VStack(alignment: .leading, spacing: 12) {
-                FeatureRow(icon: "keyboard", text: "Hold a hotkey to record your voice")
-                FeatureRow(icon: "waveform", text: "Transcription powered by whisper.cpp")
-                FeatureRow(icon: "doc.on.clipboard", text: "Text automatically pasted where you need it")
+                FeatureRow(icon: "keyboard", text: "Press the shortcut to start and stop recording")
+                FeatureRow(icon: "waveform", text: "Speech recognition runs on your Mac")
+                FeatureRow(icon: "doc.on.clipboard", text: "Text is pasted into the active text field")
             }
 
             Spacer()
 
-            Button("Get Started") {
+            Button("Continue") {
                 onNext()
             }
             .buttonStyle(.borderedProminent)
@@ -141,7 +142,7 @@ struct ModelOptionRow: View {
                     HStack {
                         Text(model.displayName)
                             .fontWeight(.medium)
-                        if model == .largeTurbo {
+                        if model == .small {
                             Text("Recommended")
                                 .font(.caption)
                                 .padding(.horizontal, 6)
@@ -201,7 +202,7 @@ struct DownloadStep: View {
                     .font(.system(size: 60))
                     .foregroundColor(.green)
 
-                Text("Download Complete!")
+                Text("Model ready")
                     .font(.headline)
             } else if let error = downloader.error {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -239,6 +240,8 @@ struct DownloadStep: View {
 struct PermissionsStep: View {
     var onNext: () -> Void
     @State private var hasAccessibility = false
+    @State private var hasMicrophone = false
+    private let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(spacing: 20) {
@@ -246,7 +249,7 @@ struct PermissionsStep: View {
                 .font(.largeTitle)
                 .fontWeight(.bold)
 
-            Text("SayStuff needs some permissions to work")
+            Text("Allow microphone access and text insertion")
                 .foregroundColor(.secondary)
 
             Spacer()
@@ -264,8 +267,8 @@ struct PermissionsStep: View {
                     icon: "mic",
                     title: "Microphone",
                     description: "Required for voice recording",
-                    isGranted: true, // Usually auto-granted on first use
-                    onRequest: {}
+                    isGranted: hasMicrophone,
+                    onRequest: requestMicrophone
                 )
             }
 
@@ -276,14 +279,25 @@ struct PermissionsStep: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
+            .disabled(!hasAccessibility || !hasMicrophone)
         }
-        .onAppear {
-            checkAccessibility()
-        }
+        .onAppear { checkAccessibility() }
+        .onReceive(permissionTimer) { _ in checkAccessibility() }
     }
 
     private func checkAccessibility() {
         hasAccessibility = AXIsProcessTrusted()
+        hasMicrophone = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
+
+    private func requestMicrophone() {
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            AVCaptureDevice.requestAccess(for: .audio) { _ in
+                DispatchQueue.main.async { checkAccessibility() }
+            }
+        } else {
+            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+        }
     }
 
     private func requestAccessibility() {
@@ -346,23 +360,23 @@ struct CompleteStep: View {
                 .font(.system(size: 80))
                 .foregroundColor(.green)
 
-            Text("You're All Set!")
+            Text("Ready")
                 .font(.largeTitle)
                 .fontWeight(.bold)
 
-            Text("Hold Option+Command+V to start recording")
+            Text("Press ⌃⌥⇧⌘A to start; press again to finish")
                 .font(.title3)
                 .foregroundColor(.secondary)
 
             Spacer()
 
             VStack(alignment: .leading, spacing: 12) {
-                Text("Quick Tips:")
+                Text("Shortcuts")
                     .fontWeight(.medium)
 
                 Text("• Click the menu bar icon to change profiles")
-                Text("• Each profile can have its own language and prompt")
-                Text("• Use prompts to improve accuracy for specific topics")
+                Text("• With Raycast Hyper Key: press Caps Lock + A")
+                Text("• Quit the old Hammerspoon dictation to avoid shortcut conflicts")
             }
             .padding()
             .background(Color.secondary.opacity(0.1))
@@ -370,7 +384,7 @@ struct CompleteStep: View {
 
             Spacer()
 
-            Button("Start Using SayStuff") {
+            Button("Done") {
                 onFinish()
             }
             .buttonStyle(.borderedProminent)

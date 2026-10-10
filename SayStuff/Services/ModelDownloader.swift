@@ -29,7 +29,7 @@ class ModelDownloader: ObservableObject {
         let destination = modelDir.appendingPathComponent(model.filename)
 
         // Check if already downloaded
-        if FileManager.default.fileExists(atPath: destination.path) {
+        if SettingsManager.shared.isModelDownloaded(model) {
             isDownloading = false
             isComplete = true
             statusMessage = "Model already downloaded"
@@ -49,7 +49,7 @@ class ModelDownloader: ObservableObject {
     }
 
     fileprivate func handleProgress(_ totalBytesWritten: Int64, _ totalBytesExpectedToWrite: Int64) {
-        progress = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+        progress = totalBytesExpectedToWrite > 0 ? Double(totalBytesWritten) / Double(totalBytesExpectedToWrite) : 0
         let mbWritten = Double(totalBytesWritten) / 1_000_000
         let mbTotal = Double(totalBytesExpectedToWrite) / 1_000_000
         statusMessage = String(format: "Downloading %.1f / %.1f MB", mbWritten, mbTotal)
@@ -94,7 +94,15 @@ private class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        guard let response = downloadTask.response as? HTTPURLResponse,
+              (200...299).contains(response.statusCode) else {
+            downloader?.handleCompletion(location: nil, destination: destination,
+                error: NSError(domain: "ModelDownload", code: 1, userInfo: [NSLocalizedDescriptionKey: "The model server returned an error. Please retry."]))
+            session.finishTasksAndInvalidate()
+            return
+        }
         downloader?.handleCompletion(location: location, destination: destination, error: nil)
+        session.finishTasksAndInvalidate()
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {

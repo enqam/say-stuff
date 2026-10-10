@@ -7,8 +7,9 @@ class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputSampleB
     private var audioOutput: AVCaptureAudioDataOutput?
     private var audioFile: AVAudioFile?
     private var audioFileURL: URL?
-    private let recordingFilename = "saystuff_recording.wav"
+    private let recordingFilenamePrefix = "saystuff_recording_"
     private let processingQueue = DispatchQueue(label: "com.saystuff.audio", qos: .userInitiated)
+    private static let processingQueueKey = DispatchSpecificKey<Bool>()
 
     // Pre-allocated reusable buffers to avoid allocations in audio callback
     private var reusablePCMBuffer: AVAudioPCMBuffer?
@@ -20,12 +21,14 @@ class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputSampleB
     // Temporary buffer for int16 -> float conversion (avoids per-callback allocation)
     private var conversionBuffer: [Float] = []
 
+    override init() {
+        super.init()
+        processingQueue.setSpecific(key: Self.processingQueueKey, value: true)
+    }
+
     func startRecording() throws {
         // Clean up any existing session
         stopAndCleanup()
-
-        // Remove old recording
-        try? FileManager.default.removeItem(at: recordingURL())
 
         // Create capture session
         let session = AVCaptureSession()
@@ -78,7 +81,7 @@ class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputSampleB
         session.commitConfiguration()
 
         // We'll create the audio file when we receive the first buffer (to get the correct format)
-        audioFileURL = recordingURL()
+        audioFileURL = makeRecordingURL()
 
         // Start session
         session.startRunning()
@@ -176,10 +179,7 @@ class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputSampleB
 
             guard let mono = getOrCreateMonoBuffer(format: monoFormat, frameCount: pcmBuffer.frameLength) else { return }
 
-            if let src = pcmBuffer.floatChannelData?[0],
-               let dst = mono.floatChannelData?[0] {
-                memcpy(dst, src, Int(pcmBuffer.frameLength) * MemoryLayout<Float>.size)
-            }
+            downmixToMono(source: pcmBuffer, destination: mono)
             monoBuffer = mono
         } else {
             monoBuffer = pcmBuffer
@@ -190,6 +190,35 @@ class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputSampleB
         } catch {
             print("[AudioRecorder] Write error: \(error)")
         }
+    }
+
+    private func downmixToMono(source: AVAudioPCMBuffer, destination: AVAudioPCMBuffer) {
+        let frameCount = Int(source.frameLength)
+        guard frameCount > 0,
+              let sourceChannels = source.floatChannelData,
+              let destinationChannel = destination.floatChannelData?[0] else {
+            return
+        }
+
+        memset(destinationChannel, 0, frameCount * MemoryLayout<Float>.size)
+
+        let channelCount = Int(source.format.channelCount)
+        for channel in 0..<channelCount {
+            vDSP_vadd(
+                destinationChannel, 1,
+                sourceChannels[channel], 1,
+                destinationChannel, 1,
+                vDSP_Length(frameCount)
+            )
+        }
+
+        var scale = 1.0 / Float(channelCount)
+        vDSP_vsmul(
+            destinationChannel, 1,
+            &scale,
+            destinationChannel, 1,
+            vDSP_Length(frameCount)
+        )
     }
 
     private func createPCMBuffer(from sampleBuffer: CMSampleBuffer) -> AVAudioPCMBuffer? {
@@ -302,37 +331,35 @@ class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputSampleB
     }
 
     private func stopAndCleanup() {
+        isRecording = false
+
         if let session = captureSession {
             session.stopRunning()
         }
-        captureSession = nil
-        audioOutput = nil
-        audioFile = nil
-        audioFileURL = nil
-        isRecording = false
 
-        // Clear reusable buffers
-        reusablePCMBuffer = nil
-        reusableMonoBuffer = nil
-        lastPCMFormat = nil
-        lastMonoFormat = nil
-        conversionBuffer = []
+        syncOnProcessingQueue {
+            captureSession = nil
+            audioOutput = nil
+            audioFile = nil
+            audioFileURL = nil
+            clearReusableBuffers()
+        }
     }
 
     func stopRecording() -> URL? {
         guard captureSession != nil else { return nil }
+        let url = audioFileURL ?? makeRecordingURL()
 
-        captureSession?.stopRunning()
-        captureSession = nil
-        audioOutput = nil
-        audioFile = nil
         isRecording = false
+        captureSession?.stopRunning()
 
-        // Clear reusable buffers
-        reusablePCMBuffer = nil
-        reusableMonoBuffer = nil
-
-        let url = recordingURL()
+        syncOnProcessingQueue {
+            captureSession = nil
+            audioOutput = nil
+            audioFile = nil
+            audioFileURL = nil
+            clearReusableBuffers()
+        }
 
         if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
            let size = attrs[.size] as? Int, size > 512 {
@@ -344,8 +371,25 @@ class AudioRecorder: NSObject, ObservableObject, AVCaptureAudioDataOutputSampleB
         return nil
     }
 
-    private func recordingURL() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent(recordingFilename)
+    private func syncOnProcessingQueue(_ work: () -> Void) {
+        if DispatchQueue.getSpecific(key: Self.processingQueueKey) == true {
+            work()
+        } else {
+            processingQueue.sync(execute: work)
+        }
+    }
+
+    private func clearReusableBuffers() {
+        reusablePCMBuffer = nil
+        reusableMonoBuffer = nil
+        lastPCMFormat = nil
+        lastMonoFormat = nil
+        conversionBuffer = []
+    }
+
+    private func makeRecordingURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("\(recordingFilenamePrefix)\(UUID().uuidString).wav")
     }
 }
 

@@ -25,7 +25,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     @Published var isRecording = false
     var isTranscribing = false  // Not @Published - menu bar doesn't need to observe this
     @Published var activeProfile: Profile?
-    @Published var selectedLanguage: String = "en"
+    @Published var selectedLanguage: String = "auto"
 
     private var transcriptionStore = TranscriptionStore.shared
 
@@ -66,6 +66,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             guard let self = self else { return }
 
             print("[SayStuff] Transcription failed: \(error)")
+            let alert = NSAlert()
+            alert.messageText = "Transcription failed"
+            alert.informativeText = "Please check the model in Settings and try again. \(error.localizedDescription)"
+            alert.runModal()
             self.isTranscribing = false
             self.updateMenuBarIcon()
         }
@@ -237,6 +241,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
             print("[SayStuff] Recording started")
         } catch {
             print("[SayStuff] Failed to start recording: \(error)")
+            screenBorderOverlay.hide()
+            volumeAttenuator.restore()
             isRecording = false
             updateMenuBarIcon()
         }

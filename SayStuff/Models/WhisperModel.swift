@@ -27,9 +27,9 @@ enum WhisperModel: String, Codable, CaseIterable {
     var sizeString: String {
         switch self {
         case .tiny: return "~75 MB"
-        case .small: return "~150 MB"
-        case .medium: return "~500 MB"
-        case .largeTurbo: return "~400 MB"
+        case .small: return "~488 MB"
+        case .medium: return "~1.53 GB"
+        case .largeTurbo: return "~1.62 GB"
         }
     }
 
