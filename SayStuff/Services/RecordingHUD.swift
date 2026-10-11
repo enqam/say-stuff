@@ -27,7 +27,7 @@ final class RecordingHUD {
     private enum Mode { case hidden, recording, processing, message }
 
     private let panel: NSPanel
-    private let pill = NSView()
+    private let pill = AppearanceAwareView()
     private let dot = CALayer()
     private let barsLayer = CALayer()
     private var bars: [CALayer] = []
@@ -59,6 +59,13 @@ final class RecordingHUD {
         panel.animationBehavior = .none
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
 
+        // Keep the HUD tied to the user's current macOS appearance. The custom
+        // view calls back when AppKit changes its effective appearance, including
+        // while this non-activating panel is already visible.
+        pill.onAppearanceChange = { [weak self] in
+            self?.updateAppearanceColors()
+        }
+
         pill.wantsLayer = true
         if #available(macOS 26.0, *) {
             // One glass view; the bars are plain layers inside it.
@@ -70,13 +77,14 @@ final class RecordingHUD {
             glass.contentView = pill
             panel.contentView = glass
         } else {
-            panel.appearance = NSAppearance(named: .darkAqua)
+            // Let AppKit resolve the fallback surface for Aqua or Dark Aqua.
+            // The old forced dark appearance made the pill look like a white
+            // sticker when the rest of the desktop was in Light mode.
+            panel.appearance = nil
             if let layer = pill.layer {
-                layer.backgroundColor = NSColor(white: 0.08, alpha: 0.94).cgColor
                 layer.cornerRadius = Metrics.height / 2
                 layer.cornerCurve = .continuous
                 layer.borderWidth = 0.5
-                layer.borderColor = NSColor(white: 1, alpha: 0.12).cgColor
             }
             panel.contentView = pill
         }
@@ -110,6 +118,26 @@ final class RecordingHUD {
 
         layoutWaveform()
         pill.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(clicked)))
+        updateAppearanceColors()
+    }
+
+    /// Resolve semantic AppKit colors for the current appearance and push them
+    /// into the layers. CALayer stores CGColors, so it will not re-resolve a
+    /// dynamic NSColor by itself after the user switches Light/Dark mode.
+    private func updateAppearanceColors() {
+        let foreground = NSColor.labelColor.withAlphaComponent(0.86)
+        let edge = NSColor.separatorColor.withAlphaComponent(0.42)
+
+        bars.forEach {
+            $0.backgroundColor = foreground.cgColor
+            $0.borderColor = edge.cgColor
+        }
+        label.textColor = NSColor.labelColor
+        icon.contentTintColor = NSColor.labelColor
+
+        guard #unavailable(macOS 26.0), let layer = pill.layer else { return }
+        layer.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.92).cgColor
+        layer.borderColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
     }
 
     @objc private func clicked() {
@@ -177,7 +205,7 @@ final class RecordingHUD {
         setWaveformVisible(true)
         layoutWaveform()
         dot.removeAllAnimations()
-        dot.backgroundColor = NSColor(white: 1, alpha: 0.35).cgColor
+        dot.backgroundColor = NSColor.secondaryLabelColor.withAlphaComponent(0.55).cgColor
         CATransaction.begin()
         CATransaction.setAnimationDuration(0.15)
         bars.forEach { setHeight($0, Metrics.minBar + 1) }
@@ -337,6 +365,17 @@ final class RecordingHUD {
     private func cancelHide() {
         hideWork?.cancel()
         hideWork = nil
+    }
+}
+
+/// The HUD's layers store resolved CGColors, so give the content view a small
+/// appearance-change hook and refresh those colors when AppKit re-resolves it.
+private final class AppearanceAwareView: NSView {
+    var onAppearanceChange: (() -> Void)?
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onAppearanceChange?()
     }
 }
 
