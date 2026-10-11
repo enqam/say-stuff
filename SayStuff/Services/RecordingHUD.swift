@@ -18,7 +18,7 @@ final class RecordingHUD {
         static let dotSize: CGFloat = 7
         static let padding: CGFloat = 14
         static let dotGap: CGFloat = 10
-        static let gapAboveDock: CGFloat = 80
+        static let gapAboveDock: CGFloat = 92
         static let frameInterval: CFTimeInterval = 1.0 / 30
         static var barsWidth: CGFloat { CGFloat(barCount) * barWidth + CGFloat(barCount - 1) * barGap }
         static var pillWidth: CGFloat { padding * 2 + dotSize + dotGap + barsWidth }
@@ -145,7 +145,7 @@ final class RecordingHUD {
             // without turning the pill into an opaque black capsule.
             glass.tintColor = isDark
                 ? NSColor.white.withAlphaComponent(0.07)
-                : NSColor.black.withAlphaComponent(0.16)
+                : NSColor.black.withAlphaComponent(0.21)
         } else if let layer = pill.layer {
             appearance.performAsCurrentDrawingAppearance {
                 layer.backgroundColor = (isDark
