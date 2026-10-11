@@ -28,6 +28,7 @@ final class RecordingHUD {
 
     private let panel: NSPanel
     private let pill = AppearanceAwareView()
+    private weak var glassView: NSView?
     private let dot = CALayer()
     private let barsLayer = CALayer()
     private var bars: [CALayer] = []
@@ -72,14 +73,13 @@ final class RecordingHUD {
             let glass = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: Metrics.pillWidth, height: Metrics.height))
             glass.cornerRadius = Metrics.height / 2
             glass.style = .clear  // the clearest glass AppKit offers: refraction, no frost, no tint
+            glassView = glass
             pill.frame = glass.bounds
             pill.autoresizingMask = [.width, .height]
             glass.contentView = pill
             panel.contentView = glass
         } else {
             // Let AppKit resolve the fallback surface for Aqua or Dark Aqua.
-            // The old forced dark appearance made the pill look like a white
-            // sticker when the rest of the desktop was in Light mode.
             panel.appearance = nil
             if let layer = pill.layer {
                 layer.cornerRadius = Metrics.height / 2
@@ -121,28 +121,38 @@ final class RecordingHUD {
         updateAppearanceColors()
     }
 
-    /// Resolve semantic AppKit colors for the current appearance and push them
-    /// into the layers. CALayer stores CGColors, so it will not re-resolve a
-    /// dynamic NSColor by itself after the user switches Light/Dark mode.
+    /// Apply the waveform and glass tint for the current appearance. CALayer
+    /// stores CGColors, so it will not re-resolve a dynamic color by itself
+    /// after the user switches Light/Dark mode.
     private func updateAppearanceColors() {
         let appearance = pill.effectiveAppearance
         let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let foreground = (isDark ? NSColor.white : NSColor.black).withAlphaComponent(0.86)
-        let edge = (isDark ? NSColor.white : NSColor.black).withAlphaComponent(0.28)
+        let foreground = NSColor.white
+        let edge = NSColor.black.withAlphaComponent(0.28)
 
         appearance.performAsCurrentDrawingAppearance {
             bars.forEach {
                 $0.backgroundColor = foreground.cgColor
                 $0.borderColor = edge.cgColor
             }
-            label.textColor = isDark ? .white : .black
-            icon.contentTintColor = isDark ? .white : .black
+            label.textColor = .white
+            icon.contentTintColor = .white
         }
 
-        guard #unavailable(macOS 26.0), let layer = pill.layer else { return }
-        appearance.performAsCurrentDrawingAppearance {
-            layer.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.92).cgColor
-            layer.borderColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
+        if #available(macOS 26.0, *), let glass = glassView as? NSGlassEffectView {
+            // Keep the glass translucent in both modes. A restrained black tint
+            // in Light mode gives the white waveform a proper surface to sit on
+            // without turning the pill into an opaque black capsule.
+            glass.tintColor = isDark
+                ? NSColor.white.withAlphaComponent(0.07)
+                : NSColor.black.withAlphaComponent(0.16)
+        } else if let layer = pill.layer {
+            appearance.performAsCurrentDrawingAppearance {
+                layer.backgroundColor = (isDark
+                    ? NSColor.white.withAlphaComponent(0.10)
+                    : NSColor.black.withAlphaComponent(0.12)).cgColor
+                layer.borderColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
+            }
         }
     }
 
