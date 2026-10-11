@@ -125,19 +125,25 @@ final class RecordingHUD {
     /// into the layers. CALayer stores CGColors, so it will not re-resolve a
     /// dynamic NSColor by itself after the user switches Light/Dark mode.
     private func updateAppearanceColors() {
-        let foreground = NSColor.labelColor.withAlphaComponent(0.86)
-        let edge = NSColor.separatorColor.withAlphaComponent(0.42)
+        let appearance = pill.effectiveAppearance
+        let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let foreground = (isDark ? NSColor.white : NSColor.black).withAlphaComponent(0.86)
+        let edge = (isDark ? NSColor.white : NSColor.black).withAlphaComponent(0.28)
 
-        bars.forEach {
-            $0.backgroundColor = foreground.cgColor
-            $0.borderColor = edge.cgColor
+        appearance.performAsCurrentDrawingAppearance {
+            bars.forEach {
+                $0.backgroundColor = foreground.cgColor
+                $0.borderColor = edge.cgColor
+            }
+            label.textColor = isDark ? .white : .black
+            icon.contentTintColor = isDark ? .white : .black
         }
-        label.textColor = NSColor.labelColor
-        icon.contentTintColor = NSColor.labelColor
 
         guard #unavailable(macOS 26.0), let layer = pill.layer else { return }
-        layer.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.92).cgColor
-        layer.borderColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
+        appearance.performAsCurrentDrawingAppearance {
+            layer.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.92).cgColor
+            layer.borderColor = NSColor.separatorColor.withAlphaComponent(0.55).cgColor
+        }
     }
 
     @objc private func clicked() {

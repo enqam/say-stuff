@@ -17,7 +17,8 @@ actor ParakeetService {
     private var inFlight = 0
     private var idleTask: Task<Void, Never>?
     /// Seconds; 0 keeps the model loaded indefinitely.
-    private var idleTimeout: TimeInterval = 300
+    /// Keep the warm Parakeet model around for 45 minutes between uses.
+    private var idleTimeout: TimeInterval = 45 * 60
 
     struct Result {
         let text: String
