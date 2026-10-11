@@ -145,7 +145,7 @@ final class RecordingHUD {
             // without turning the pill into an opaque black capsule.
             glass.tintColor = isDark
                 ? NSColor.white.withAlphaComponent(0.07)
-                : NSColor.black.withAlphaComponent(0.21)
+                : NSColor.black.withAlphaComponent(0.28)
         } else if let layer = pill.layer {
             appearance.performAsCurrentDrawingAppearance {
                 layer.backgroundColor = (isDark
