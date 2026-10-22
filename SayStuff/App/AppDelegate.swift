@@ -11,7 +11,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let banner = StatusBanner()
     private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
-    private let updateManager = UpdateManager()
     private let dictation = DictationController.shared
     private var cancellables = Set<AnyCancellable>()
     private var statusIconShowsRecording = false
@@ -167,8 +166,4 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func hideDictionaryNotice() { banner.hide() }
-
-    func checkForUpdates() {
-        updateManager.checkForUpdates()
-    }
 }

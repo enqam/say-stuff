@@ -181,7 +181,6 @@ struct GeneralPane: View {
 
             HStack(spacing: 14) {
                 Text("SayStuff \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")")
-                Button("Check for updates") { AppDelegate.shared.checkForUpdates() }.buttonStyle(.plain)
                 Button("Run setup again") { AppDelegate.shared.showOnboarding() }.buttonStyle(.plain)
                 Button("App data") { NSWorkspace.shared.open(AppPaths.support) }.buttonStyle(.plain)
             }

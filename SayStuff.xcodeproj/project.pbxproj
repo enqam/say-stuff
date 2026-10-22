@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		121CD9202F47D7170035408B /* VolumeAttenuator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 121CD91F2F47D7170035408B /* VolumeAttenuator.swift */; };
-		1238F6F52F255C88006BF7BD /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 1238F6F42F255C88006BF7BD /* Sparkle */; };
 		C1000001 /* FluidAudio in Frameworks */ = {isa = PBXBuildFile; productRef = C3000001 /* FluidAudio */; };
 		12D6DFFF2F2E3D9D00D0FBDA /* ScreenBorderOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12D6DFFE2F2E3D9D00D0FBDA /* ScreenBorderOverlay.swift */; };
 		12E688CA2F26D91B00DBCAB4 /* TranscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E688C92F26D91B00DBCAB4 /* TranscriptionStore.swift */; };
@@ -27,7 +26,6 @@
 		A1000013 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000013 /* AppSettings.swift */; };
 		A1000014 /* WhisperModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000014 /* WhisperModel.swift */; };
 		A1000016 /* AudioDeviceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000018 /* AudioDeviceManager.swift */; };
-		A1000017 /* UpdateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000019 /* UpdateManager.swift */; };
 		B1000001 /* KeyCombo.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000001 /* KeyCombo.swift */; };
 		B1000002 /* DictionaryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000002 /* DictionaryStore.swift */; };
 		B1000003 /* DictationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000003 /* DictationController.swift */; };
@@ -66,7 +64,6 @@
 		A2000015 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A2000016 /* SayStuff.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SayStuff.entitlements; sourceTree = "<group>"; };
 		A2000018 /* AudioDeviceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioDeviceManager.swift; sourceTree = "<group>"; };
-		A2000019 /* UpdateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateManager.swift; sourceTree = "<group>"; };
 		A3000001 /* SayStuff.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SayStuff.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B2000001 /* KeyCombo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyCombo.swift; sourceTree = "<group>"; };
 		B2000002 /* DictionaryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DictionaryStore.swift; sourceTree = "<group>"; };
@@ -90,7 +87,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				1238F6F52F255C88006BF7BD /* Sparkle in Frameworks */,
 				C1000001 /* FluidAudio in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -161,7 +157,6 @@
 				A2000010 /* PasteService.swift */,
 				A2000011 /* ModelDownloader.swift */,
 				A2000018 /* AudioDeviceManager.swift */,
-				A2000019 /* UpdateManager.swift */,
 				121CD91F2F47D7170035408B /* VolumeAttenuator.swift */,
 			);
 			path = Services;
@@ -242,7 +237,6 @@
 			);
 			mainGroup = A5000001;
 			packageReferences = (
-				1238F6F32F255C88006BF7BD /* XCRemoteSwiftPackageReference "Sparkle" */,
 				C2000001 /* XCRemoteSwiftPackageReference "FluidAudio" */,
 			);
 			productRefGroup = A5000007 /* Products */;
@@ -302,7 +296,6 @@
 				A1000014 /* WhisperModel.swift in Sources */,
 				A1000016 /* AudioDeviceManager.swift in Sources */,
 				12E688CC2F26D92600DBCAB4 /* HistoryView.swift in Sources */,
-				A1000017 /* UpdateManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -507,14 +500,6 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		1238F6F32F255C88006BF7BD /* XCRemoteSwiftPackageReference "Sparkle" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/sparkle-project/Sparkle";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.8.1;
-			};
-		};
 		C2000001 /* XCRemoteSwiftPackageReference "FluidAudio" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/FluidInference/FluidAudio.git";
@@ -526,11 +511,6 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		1238F6F42F255C88006BF7BD /* Sparkle */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 1238F6F32F255C88006BF7BD /* XCRemoteSwiftPackageReference "Sparkle" */;
-			productName = Sparkle;
-		};
 		C3000001 /* FluidAudio */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = C2000001 /* XCRemoteSwiftPackageReference "FluidAudio" */;
