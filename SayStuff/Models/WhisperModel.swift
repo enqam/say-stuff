@@ -7,8 +7,11 @@ enum WhisperModel: String, Codable, CaseIterable {
     case largeTurbo = "large-v3-turbo"
     /// Not Whisper: NVIDIA Parakeet TDT 0.6B v3 via FluidAudio (Neural Engine).
     case parakeet = "parakeet-v3"
+    /// Parakeet Ultra: a post-training of v3 with the same languages and speed, lower error rates.
+    case parakeetUltra = "parakeet-ultra"
 
-    var isWhisper: Bool { self != .parakeet }
+    var isParakeet: Bool { self == .parakeet || self == .parakeetUltra }
+    var isWhisper: Bool { !isParakeet }
 
     var displayName: String {
         switch self {
@@ -17,6 +20,7 @@ enum WhisperModel: String, Codable, CaseIterable {
         case .medium: return "Medium"
         case .largeTurbo: return "Large v3 Turbo"
         case .parakeet: return "Parakeet v3"
+        case .parakeetUltra: return "Parakeet Ultra"
         }
     }
 
@@ -27,6 +31,7 @@ enum WhisperModel: String, Codable, CaseIterable {
         case .medium: return "Better accuracy, slower"
         case .largeTurbo: return "Best quality, optimized for speed"
         case .parakeet: return "Fastest, Neural Engine · 25 European languages"
+        case .parakeetUltra: return "Parakeet, more accurate at the same speed"
         }
     }
 
@@ -37,6 +42,7 @@ enum WhisperModel: String, Codable, CaseIterable {
         case .medium: return "~1.53 GB"
         case .largeTurbo: return "~1.62 GB"
         case .parakeet: return "~0.5 GB"
+        case .parakeetUltra: return "~0.65 GB"
         }
     }
 
@@ -47,6 +53,7 @@ enum WhisperModel: String, Codable, CaseIterable {
         case .medium: return "Medium"
         case .largeTurbo: return "Turbo"
         case .parakeet: return "Parakeet"
+        case .parakeetUltra: return "Ultra"
         }
     }
 
@@ -58,6 +65,7 @@ enum WhisperModel: String, Codable, CaseIterable {
         case .medium: return "~1.7 GB"
         case .largeTurbo: return "~1.8 GB"
         case .parakeet: return "~0.6 GB"
+        case .parakeetUltra: return "~0.7 GB"
         }
     }
 

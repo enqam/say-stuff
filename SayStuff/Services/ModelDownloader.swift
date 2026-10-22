@@ -11,7 +11,7 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
 
     private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
     private var tasks: [Int: (task: URLSessionDownloadTask, model: WhisperModel)] = [:]
-    private var parakeetTask: Task<Void, Never>?
+    private var parakeetTasks: [WhisperModel: Task<Void, Never>] = [:]
 
     func isDownloading(_ model: WhisperModel) -> Bool {
         progress[model] != nil
@@ -26,7 +26,7 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
         errors[model] = nil
         progress[model] = 0
         guard model.isWhisper else {
-            downloadParakeet()
+            downloadParakeet(model)
             return
         }
         let task = session.downloadTask(with: model.downloadURL)
@@ -35,30 +35,31 @@ final class ModelDownloader: NSObject, ObservableObject, URLSessionDownloadDeleg
     }
 
     /// Parakeet comes from FluidAudio's model hub (several CoreML files), not a single URL.
-    private func downloadParakeet() {
-        parakeetTask = Task { @MainActor in
+    private func downloadParakeet(_ model: WhisperModel) {
+        parakeetTasks[model] = Task { @MainActor in
             let downloader = ModelDownloader.shared
+            defer { downloader.parakeetTasks[model] = nil }
             do {
-                try await ParakeetService.download { fraction in
+                try await ParakeetService.download(model) { fraction in
                     DispatchQueue.main.async {
-                        if downloader.progress[.parakeet] != nil { downloader.progress[.parakeet] = fraction }
+                        if downloader.progress[model] != nil { downloader.progress[model] = fraction }
                     }
                 }
-                downloader.progress[.parakeet] = nil
+                downloader.progress[model] = nil
                 let settings = SettingsManager.shared
-                if !settings.isModelDownloaded(settings.settings.modelSize) { settings.settings.modelSize = .parakeet }
+                if !settings.isModelDownloaded(settings.settings.modelSize) { settings.settings.modelSize = model }
                 downloader.completedCount += 1
             } catch {
-                downloader.progress[.parakeet] = nil
-                if !Task.isCancelled { downloader.errors[.parakeet] = error.localizedDescription }
+                downloader.progress[model] = nil
+                if !Task.isCancelled { downloader.errors[model] = error.localizedDescription }
             }
         }
     }
 
     func cancel(_ model: WhisperModel) {
-        if model == .parakeet {
-            parakeetTask?.cancel()
-            progress[.parakeet] = nil
+        if model.isParakeet {
+            parakeetTasks[model]?.cancel()
+            progress[model] = nil
             return
         }
         guard let entry = tasks.first(where: { $0.value.model == model }) else { return }

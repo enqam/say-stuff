@@ -21,6 +21,7 @@
 		A1000008 /* WhisperService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000008 /* WhisperService.swift */; };
 		A1000009 /* HotkeyManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000009 /* HotkeyManager.swift */; };
 		A1000010 /* PasteService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000010 /* PasteService.swift */; };
+		B1000016 /* TextCleanup.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000016 /* TextCleanup.swift */; };
 		A1000011 /* ModelDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000011 /* ModelDownloader.swift */; };
 		A1000012 /* Profile.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000012 /* Profile.swift */; };
 		A1000013 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000013 /* AppSettings.swift */; };
@@ -36,6 +37,8 @@
 		B1000008 /* UISnapshots.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000008 /* UISnapshots.swift */; };
 		B1000009 /* UsageLedger.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000009 /* UsageLedger.swift */; };
 		B1000010 /* UsageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000010 /* UsageView.swift */; };
+		B1000017 /* SpeechStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000017 /* SpeechStats.swift */; };
+		B1000018 /* SpeakingCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000018 /* SpeakingCard.swift */; };
 		B1000011 /* MenuPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000011 /* MenuPanel.swift */; };
 		B1000012 /* CloudServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000012 /* CloudServices.swift */; };
 		B1000013 /* Telemetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2000013 /* Telemetry.swift */; };
@@ -57,6 +60,7 @@
 		A2000008 /* WhisperService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperService.swift; sourceTree = "<group>"; };
 		A2000009 /* HotkeyManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyManager.swift; sourceTree = "<group>"; };
 		A2000010 /* PasteService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasteService.swift; sourceTree = "<group>"; };
+		B2000016 /* TextCleanup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextCleanup.swift; sourceTree = "<group>"; };
 		A2000011 /* ModelDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloader.swift; sourceTree = "<group>"; };
 		A2000012 /* Profile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Profile.swift; sourceTree = "<group>"; };
 		A2000013 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
@@ -75,6 +79,8 @@
 		B2000008 /* UISnapshots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UISnapshots.swift; sourceTree = "<group>"; };
 		B2000009 /* UsageLedger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageLedger.swift; sourceTree = "<group>"; };
 		B2000010 /* UsageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UsageView.swift; sourceTree = "<group>"; };
+		B2000017 /* SpeechStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechStats.swift; sourceTree = "<group>"; };
+		B2000018 /* SpeakingCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeakingCard.swift; sourceTree = "<group>"; };
 		B2000011 /* MenuPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuPanel.swift; sourceTree = "<group>"; };
 		B2000012 /* CloudServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudServices.swift; sourceTree = "<group>"; };
 		B2000013 /* Telemetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Telemetry.swift; sourceTree = "<group>"; };
@@ -131,6 +137,7 @@
 			isa = PBXGroup;
 			children = (
 				B2000010 /* UsageView.swift */,
+				B2000018 /* SpeakingCard.swift */,
 				B2000007 /* DictionaryView.swift */,
 				B2000006 /* ProfilesView.swift */,
 				B2000005 /* Components.swift */,
@@ -155,6 +162,7 @@
 				A2000008 /* WhisperService.swift */,
 				A2000009 /* HotkeyManager.swift */,
 				A2000010 /* PasteService.swift */,
+				B2000016 /* TextCleanup.swift */,
 				A2000011 /* ModelDownloader.swift */,
 				A2000018 /* AudioDeviceManager.swift */,
 				121CD91F2F47D7170035408B /* VolumeAttenuator.swift */,
@@ -167,6 +175,7 @@
 			children = (
 				B2000013 /* Telemetry.swift */,
 				B2000009 /* UsageLedger.swift */,
+				B2000017 /* SpeechStats.swift */,
 				B2000002 /* DictionaryStore.swift */,
 				B2000001 /* KeyCombo.swift */,
 				12E688C92F26D91B00DBCAB4 /* TranscriptionStore.swift */,
@@ -275,6 +284,8 @@
 				B1000008 /* UISnapshots.swift in Sources */,
 				B1000009 /* UsageLedger.swift in Sources */,
 				B1000010 /* UsageView.swift in Sources */,
+				B1000017 /* SpeechStats.swift in Sources */,
+				B1000018 /* SpeakingCard.swift in Sources */,
 				B1000011 /* MenuPanel.swift in Sources */,
 				B1000012 /* CloudServices.swift in Sources */,
 				B1000013 /* Telemetry.swift in Sources */,
@@ -290,6 +301,7 @@
 				A1000009 /* HotkeyManager.swift in Sources */,
 				121CD9202F47D7170035408B /* VolumeAttenuator.swift in Sources */,
 				A1000010 /* PasteService.swift in Sources */,
+				B1000016 /* TextCleanup.swift in Sources */,
 				A1000011 /* ModelDownloader.swift in Sources */,
 				A1000012 /* Profile.swift in Sources */,
 				A1000013 /* AppSettings.swift in Sources */,

@@ -76,6 +76,9 @@ enum UISnapshots {
                 return AnyView(SettingsView())
             })
         }
+        jobs.append(Job(name: "history-speaking", size: nil) {
+            AnyView(SpeakingCard(stats: SpeechStats(fixture: speechFixture())).frame(width: 600).padding(20))
+        })
         for step in 0..<3 {
             jobs.append(Job(name: "onboarding-\(step + 1)", size: NSSize(width: 500, height: 500)) {
                 AnyView(OnboardingView(initialStep: step) {})
@@ -87,6 +90,25 @@ enum UISnapshots {
             for job in jobs { queue.append((job, appearance)) }
         }
         renderNext(queue, into: directory)
+    }
+
+    private static func speechFixture() -> [SpeechSample] {
+        var generator = SystemRandomNumberGenerator()
+        let apps = [("Messages", "com.apple.MobileSMS"), ("T3 Code", "com.t3.code"), ("Notes", "com.apple.Notes")]
+        return (0..<120).map { index in
+            let span = Double.random(in: 2...25, using: &generator)
+            let russian = index % 4 == 0
+            let rate = (russian ? 2.3 : 2.7) + Double(index % 30) / 60 + Double.random(in: -0.3...0.3, using: &generator)
+            let pauses = Int(span / 5)
+            let app = apps[index % apps.count]
+            return SpeechSample(
+                date: Date().addingTimeInterval(-Double(index) * 21_600),
+                words: Int(span * rate), fillers: Int.random(in: 0...2, using: &generator),
+                timing: SpeechTiming(spanSeconds: span, voicedSeconds: span * 0.72, pauses: pauses,
+                                     pauseSeconds: Double(pauses) * 0.8, longestPauseSeconds: pauses > 0 ? 1.2 : 0),
+                recordingSeconds: span + 0.8, language: russian ? "ru" : "en",
+                app: app.0, appBundleID: app.1, setup: "Local · Parakeet Ultra", profile: nil)
+        }
     }
 
     private static func renderNext(_ queue: [(Job, NSAppearance.Name)], into directory: URL) {

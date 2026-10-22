@@ -317,12 +317,12 @@ struct MenuBarView: View {
             sectionHeading("Microphone", action: "Refresh") { devices.refreshDevices() }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 2), spacing: 6) {
                 MenuChoice(title: "System default", isSelected: settings.selectedAudioDeviceUID == nil) {
-                    settingsManager.settings.selectedAudioDeviceUID = nil
+                    settingsManager.settings.selectMicrophone(nil)
                 }
-                .help("Follows the system input device")
+                .help("Follows the system input, except Bluetooth headsets and iPhones")
                 ForEach(inputDevices) { device in
                     MenuChoice(title: device.shortName, isSelected: settings.selectedAudioDeviceUID == device.uid) {
-                        settingsManager.settings.selectedAudioDeviceUID = device.uid
+                        settingsManager.settings.selectMicrophone(device)
                     }
                     .help(device.name)
                     .accessibilityLabel(device.name)
@@ -330,7 +330,7 @@ struct MenuBarView: View {
             }
             if let selectedUID = settings.selectedAudioDeviceUID,
                !inputDevices.contains(where: { $0.uid == selectedUID }) {
-                Text("Selected microphone is disconnected. Choose another input.")
+                Text("\(settings.selectedAudioDeviceName ?? "Selected microphone") is disconnected. SayStuff switches back to it when it reconnects.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.warning)
                     .fixedSize(horizontal: false, vertical: true)

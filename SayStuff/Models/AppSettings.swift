@@ -69,12 +69,17 @@ enum CloudProvider: String, Codable, CaseIterable {
     }
 }
 
+struct RememberedMicrophone: Codable, Equatable {
+    var uid: String
+    var name: String?
+}
+
 struct AppSettings: Codable, Equatable {
     // Transcription
     var engine: TranscriptionEngine = .local
     var cloudProvider: CloudProvider = .groq
     /// Minutes the local model stays in memory after the last dictation; 0 = always.
-    var modelIdleMinutes: Double = 5
+    var modelIdleMinutes: Double = 0
     var modelSize: WhisperModel = .small
     var whisperPath: String = "/usr/local/bin/whisper-cli"
     var modelDirectory: String = "~/Library/Application Support/SayStuff/models"
@@ -83,6 +88,10 @@ struct AppSettings: Codable, Equatable {
     /// Russian phrase can't come out as Hungarian.
     var spokenLanguages: [String] = ["en", "ru"]
     var addTrailingSpace: Bool = true
+    /// Whisper only: transcribe in chunks while the user speaks (experimental).
+    var streamWhisper: Bool = false
+    /// Drop um/uh and words said twice in a row ("the the").
+    var removeFillers: Bool = true
 
     // Output
     var activeProfileID: UUID? = nil  // nil = raw transcript
@@ -97,6 +106,9 @@ struct AppSettings: Codable, Equatable {
 
     // Audio & feedback
     var selectedAudioDeviceUID: String? = nil  // nil = system default
+    var selectedAudioDeviceName: String? = nil  // finds the chosen mic again if its UID changes
+    /// Every mic the user picked, newest first. Plugging one in switches to it.
+    var rememberedMicrophones: [RememberedMicrophone] = []
     var playSounds: Bool = true
     var attenuateAudio: Bool = true
     var attenuationLevel: Float = 0.25
@@ -135,6 +147,8 @@ struct AppSettings: Codable, Equatable {
         spokenLanguages = value(.spokenLanguages, d.spokenLanguages)
         languageHotkeys = value(.languageHotkeys, d.languageHotkeys)
         addTrailingSpace = value(.addTrailingSpace, d.addTrailingSpace)
+        streamWhisper = value(.streamWhisper, d.streamWhisper)
+        removeFillers = value(.removeFillers, d.removeFillers)
         activeProfileID = value(.activeProfileID, d.activeProfileID)
         learnCorrections = value(.learnCorrections, d.learnCorrections)
         hotkeyModifiers = value(.hotkeyModifiers, d.hotkeyModifiers)
@@ -143,6 +157,16 @@ struct AppSettings: Codable, Equatable {
         hotkeyMode = value(.hotkeyMode, d.hotkeyMode)
         toggleTimeout = value(.toggleTimeout, d.toggleTimeout)
         selectedAudioDeviceUID = value(.selectedAudioDeviceUID, d.selectedAudioDeviceUID)
+        selectedAudioDeviceName = value(.selectedAudioDeviceName, d.selectedAudioDeviceName)
+        rememberedMicrophones = value(.rememberedMicrophones, d.rememberedMicrophones)
+        if let uid = selectedAudioDeviceUID, AudioDevice.isTransient(uid: uid) {
+            selectedAudioDeviceUID = nil
+            selectedAudioDeviceName = nil
+        }
+        rememberedMicrophones.removeAll { AudioDevice.isTransient(uid: $0.uid) }
+        if rememberedMicrophones.isEmpty, let uid = selectedAudioDeviceUID {
+            rememberedMicrophones = [RememberedMicrophone(uid: uid, name: selectedAudioDeviceName)]
+        }
         attenuateAudio = value(.attenuateAudio, d.attenuateAudio)
         attenuationLevel = value(.attenuationLevel, d.attenuationLevel)
         showScreenBorder = value(.showScreenBorder, d.showScreenBorder)
@@ -154,6 +178,19 @@ struct AppSettings: Codable, Equatable {
     /// empty for unrestricted detection.
     var candidateLanguages: [String] {
         language == "auto" ? spokenLanguages : [language]
+    }
+
+    /// nil follows the system input and forgets the remembered mics.
+    mutating func selectMicrophone(_ device: AudioDevice?) {
+        selectedAudioDeviceUID = device?.uid
+        selectedAudioDeviceName = device?.name
+        guard let device else {
+            rememberedMicrophones = []
+            return
+        }
+        rememberedMicrophones.removeAll { device.matches(uid: $0.uid, name: $0.name) }
+        rememberedMicrophones.insert(RememberedMicrophone(uid: device.uid, name: device.name), at: 0)
+        rememberedMicrophones = Array(rememberedMicrophones.prefix(8))
     }
 
     mutating func toggleSpokenLanguage(_ code: String) {
@@ -337,7 +374,7 @@ final class SettingsManager: ObservableObject {
     }
 
     func isModelDownloaded(_ model: WhisperModel) -> Bool {
-        guard model.isWhisper else { return ParakeetService.isDownloaded }
+        guard model.isWhisper else { return ParakeetService.isDownloaded(model) }
         return FileManager.default.fileExists(atPath: modelURL(for: model).path)
     }
 }

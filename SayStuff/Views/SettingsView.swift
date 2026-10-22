@@ -153,9 +153,9 @@ struct GeneralPane: View {
 
             SettingsSection(title: "Microphone") {
                 Card {
-                    micRow(name: "System default", uid: nil, last: devices.inputDevices.isEmpty)
+                    micRow(nil, last: devices.inputDevices.isEmpty)
                     ForEach(devices.inputDevices) { device in
-                        micRow(name: device.name, uid: device.uid, last: device == devices.inputDevices.last)
+                        micRow(device, last: device == devices.inputDevices.last)
                     }
                 }
             }
@@ -190,12 +190,12 @@ struct GeneralPane: View {
         }
     }
 
-    private func micRow(name: String, uid: String?, last: Bool) -> some View {
-        let isSelected = settingsManager.settings.selectedAudioDeviceUID == uid
+    private func micRow(_ device: AudioDevice?, last: Bool) -> some View {
+        let isSelected = settingsManager.settings.selectedAudioDeviceUID == device?.uid
         return Button {
-            settingsManager.settings.selectedAudioDeviceUID = uid
+            settingsManager.settings.selectMicrophone(device)
         } label: {
-            CardRow(title: name, showsDivider: !last) {
+            CardRow(title: device?.name ?? "System default", showsDivider: !last) {
                 Image(systemName: "checkmark")
                     .font(.system(size: 11, weight: .bold))
                     .foregroundStyle(Theme.accent)
@@ -228,8 +228,14 @@ struct SpeechPane: View {
                         ForEach(WhisperModel.allCases, id: \.self) { model in
                             ModelRow(model: model)
                         }
+                        if settingsManager.settings.modelSize.isWhisper {
+                            CardRow(title: "Transcribe while speaking",
+                                    detail: "Experimental. Whisper works through each pause, so only the last few seconds are left when you stop.") {
+                                Switch(isOn: $settingsManager.settings.streamWhisper)
+                            }
+                        }
                         CardRow(title: "Keep model in memory",
-                                detail: "Loads while you start talking, then frees its memory (\(settingsManager.settings.modelSize.memoryString)) when idle.") {
+                                detail: "Prepares in the background, then frees its memory (\(settingsManager.settings.modelSize.memoryString)) when idle.") {
                             ChipPicker(options: [(5.0, "5 min"), (30, "30 min"), (0, "Always")],
                                        selection: $settingsManager.settings.modelIdleMinutes)
                         }
@@ -310,6 +316,9 @@ struct SpeechPane: View {
             }
 
             Card {
+                CardRow(title: "Remove ums and repeats", detail: "Drops um, uh and words said twice in a row. Nothing else is reworded.") {
+                    Switch(isOn: $settingsManager.settings.removeFillers)
+                }
                 CardRow(title: "Add a space after inserted text", showsDivider: false) {
                     Switch(isOn: $settingsManager.settings.addTrailingSpace)
                 }

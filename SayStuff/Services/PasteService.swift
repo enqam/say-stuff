@@ -1,4 +1,5 @@
 import Cocoa
+import os
 import Carbon.HIToolbox
 import ApplicationServices
 
@@ -16,7 +17,8 @@ final class PasteService {
     private var pendingRestore: DispatchWorkItem?
     private var savedItems: [NSPasteboardItem]?
 
-    func paste(_ text: String, trace: LatencyTrace? = nil) -> Outcome {
+    /// `keepOnClipboard` leaves the text there for a manual ⌘V when it's unclear the paste landed.
+    func paste(_ text: String, keepOnClipboard: Bool = false, trace: LatencyTrace? = nil) -> Outcome {
         trace?.mark("paste.started")
         guard AXIsProcessTrusted() else {
             pasteboard.clearContents()
@@ -43,6 +45,10 @@ final class PasteService {
         trace?.mark("paste.clipboardWritten")
         postCommandV()
         trace?.mark("paste.eventsPosted")
+        if keepOnClipboard {
+            savedItems = nil
+            return .pasted
+        }
 
         // Give slow apps (Electron, browsers) time to read the clipboard before restoring it.
         let restore = DispatchWorkItem { [weak self] in
@@ -56,6 +62,14 @@ final class PasteService {
         pendingRestore = restore
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: restore)
         return .pasted
+    }
+
+    /// Leaves the text on the clipboard (when there was nowhere to paste it).
+    func copy(_ text: String) {
+        pendingRestore?.cancel()
+        savedItems = nil
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
     }
 
     private func snapshot() -> [NSPasteboardItem] {
@@ -79,4 +93,101 @@ final class PasteService {
         keyDown?.post(tap: .cghidEventTap)
         keyUp?.post(tap: .cghidEventTap)
     }
+}
+
+/// Whether keyboard focus is somewhere text can go. Off the main thread: Accessibility calls
+/// into other apps can block. Answers `.none` only when it's clearly not a text field, so
+/// apps it can't read still paste immediately. Every answer is logged (category "focus").
+enum TextFocus {
+    enum State { case text, none, unknown }
+    private static let log = Logger(subsystem: "com.saystuff.app", category: "focus")
+
+    static func state() -> State {
+        guard AXIsProcessTrusted(), let app = NSWorkspace.shared.frontmostApplication else { return .unknown }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        let chromium = isChromium(app)
+        // Chromium and Electron only describe their fields once asked to.
+        if chromium { AXUIElementSetAttributeValue(appElement, "AXManualAccessibility" as CFString, kCFBooleanTrue) }
+        let name = app.localizedName ?? app.bundleIdentifier ?? "?"
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.25)
+        AXUIElementSetMessagingTimeout(appElement, 0.25)
+        var focused: AnyObject?
+        var status = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
+        var via = "system"
+        if status != .success, chromium {
+            // Chromium browsers (Helium) answer "nothing focused" system-wide even with the
+            // caret in a field. Ask the app itself, then switch on the full accessibility
+            // mode screen readers use, which browsers honor and Electron doesn't need.
+            status = AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focused)
+            via = "app"
+            if status != .success, !isElectron(app) {
+                AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+                status = AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &focused)
+                via = "enhanced"
+            }
+        }
+        guard status == .success, let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
+            // Nothing focused only counts in an app that otherwise answers Accessibility, and
+            // not in Chromium, which can't be trusted to report its fields.
+            var window: AnyObject?
+            let answers = !chromium && status == .noValue
+                && AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &window) == .success
+            log.notice("\(name, privacy: .public): no focused element (\(status.rawValue), \(via, privacy: .public)) -> \(answers ? "none" : "unknown", privacy: .public)")
+            return answers ? .none : .unknown
+        }
+        let element = focused as! AXUIElement
+        AXUIElementSetMessagingTimeout(element, 0.25)
+        var roleValue: AnyObject?
+        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue)
+        let role = roleValue as? String ?? ""
+        let result: State
+        var range: AnyObject?
+        var settable: DarwinBoolean = false
+        if textRoles.contains(role) {
+            result = .text
+        } else if notTextRoles.contains(role) {
+            // Checked before the attribute tests: Electron buttons report a settable value.
+            result = .none
+        } else if AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &range) == .success
+            || (AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue) {
+            result = .text
+        } else if chromium && role == kAXGroupRole {
+            // Chromium reports its editable fields as text fields or areas (with a selection
+            // range), so a focused group there is page content, not a field.
+            result = .none
+        } else {
+            result = .unknown
+        }
+        log.notice("\(name, privacy: .public): focused \(role, privacy: .public) (\(via, privacy: .public)) -> \("\(result)", privacy: .public)")
+        return result
+    }
+
+    private static func isElectron(_ app: NSRunningApplication) -> Bool {
+        guard let bundle = app.bundleURL else { return false }
+        return FileManager.default.fileExists(atPath: bundle
+            .appendingPathComponent("Contents/Frameworks/Electron Framework.framework").path)
+    }
+
+    /// Chrome-based browsers and Electron apps.
+    private static func isChromium(_ app: NSRunningApplication) -> Bool {
+        guard let bundle = app.bundleURL else { return false }
+        let frameworks = bundle.appendingPathComponent("Contents/Frameworks")
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: frameworks.path)) ?? []
+        // Browsers rename their framework ("Helium Framework"), but all ship Chrome's crash handler in it.
+        return names.contains { name in
+            name == "Electron Framework.framework" || (name.hasSuffix(" Framework.framework")
+                && FileManager.default.fileExists(atPath: frameworks.appendingPathComponent(name)
+                    .appendingPathComponent("Versions/Current/Helpers/chrome_crashpad_handler").path))
+        }
+    }
+
+    private static let textRoles: Set<String> = [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole, "AXSearchField"]
+    /// Things that take focus but never text. Groups stay out elsewhere: some editors and
+    /// terminals report their text views as groups.
+    private static let notTextRoles: Set<String> = [
+        "AXWebArea", kAXWindowRole, kAXListRole, kAXOutlineRole, kAXTableRole, kAXScrollAreaRole,
+        kAXButtonRole, kAXImageRole, kAXRowRole, kAXCellRole, kAXBrowserRole, kAXToolbarRole,
+        kAXTabGroupRole, kAXSplitGroupRole, kAXCheckBoxRole, kAXPopUpButtonRole, kAXMenuButtonRole,
+    ]
 }

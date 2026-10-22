@@ -6,6 +6,8 @@ struct HistoryPane: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            SpeakingCard()
+                .padding(.bottom, 12)
             SpeedCard()
                 .padding(.bottom, 12)
             HStack {

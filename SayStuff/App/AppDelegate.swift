@@ -51,10 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "SayStuff")?
-                .withSymbolConfiguration(.init(pointSize: 14, weight: .semibold))
-            image?.isTemplate = true
-            button.image = image
+            button.image = idleIcon
             button.action = #selector(togglePopover)
             button.target = self
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
@@ -65,20 +62,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    private let idleIcon: NSImage? = {
+        let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "SayStuff")?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .semibold))
+        image?.isTemplate = true
+        return image
+    }()
+
+    /// Drawn red rather than tinted: the menu bar can render a tinted template image monochrome.
+    private let activeIcon: NSImage? = {
+        let image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "SayStuff, dictating")?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+                .applying(NSImage.SymbolConfiguration(paletteColors: [.systemRed])))
+        image?.isTemplate = false
+        return image
+    }()
+
     private func updateStatusIcon(for phase: DictationController.Phase) {
         guard let button = statusItem.button else { return }
         switch phase {
         case .idle:
             guard statusIconShowsRecording else { return }
             statusIconShowsRecording = false
-            button.contentTintColor = nil
+            button.image = idleIcon
         case .recording:
             guard !statusIconShowsRecording else { return }
             statusIconShowsRecording = true
-            button.contentTintColor = Theme.nsAccent
+            button.image = activeIcon
         case .processing:
             // Updating the status-item scene can synchronously wait on the graphics
-            // server. Keep its recording appearance until the result has been pasted;
+            // server. Stay red from recording until the result has been pasted;
             // the HUD shows processing without delaying the main-thread handoffs.
             break
         }

@@ -54,7 +54,7 @@ final class WhisperService {
 
     // MARK: - Server
 
-    private struct ServerResult: Decodable {
+    fileprivate struct ServerResult: Decodable {
         let text: String
         let language: String?
         let language_probabilities: [String: Double]?
@@ -62,23 +62,46 @@ final class WhisperService {
 
     private func transcribeWithServer(_ base: URL, _ request: Request) async throws -> (String, Bool) {
         let audio = try Data(contentsOf: request.audioURL)
-        let forced = request.candidates.count == 1 ? request.candidates[0] : nil
+        let result = try await Self.transcribe(base, audio: audio, candidates: request.candidates, prompt: request.vocabulary)
+        return (result.text, result.retried)
+    }
 
-        var result = try await infer(base, audio: audio, language: forced ?? "auto", vocabulary: request.vocabulary)
+    /// One request (two more if the detected language isn't one the user speaks).
+    static func transcribe(_ base: URL, audio: Data, candidates: [String], prompt: String?)
+        async throws -> (text: String, language: String?, retried: Bool) {
+        let forced = candidates.count == 1 ? candidates[0] : nil
+
+        var result = try await infer(base, audio: audio, language: forced ?? "auto", vocabulary: prompt)
+        var language = forced ?? result.language
         var retried = false
-        if forced == nil, !LanguageMatch.isAllowed(result.language, in: request.candidates) {
+        if forced == nil, !LanguageMatch.isAllowed(result.language, in: candidates) {
             retried = true
             // Detected something the user doesn't speak: take the likeliest of their languages.
             let probabilities = try await infer(base, audio: audio, language: "auto", vocabulary: nil, detectOnly: true)
                 .language_probabilities ?? [:]
-            let best = request.candidates.max { (probabilities[$0] ?? 0) < (probabilities[$1] ?? 0) } ?? request.candidates[0]
+            let best = candidates.max { (probabilities[$0] ?? 0) < (probabilities[$1] ?? 0) } ?? candidates[0]
             print("[Whisper] Detected \(result.language ?? "?"), retrying as \(best)")
-            result = try await infer(base, audio: audio, language: best, vocabulary: request.vocabulary)
+            result = try await infer(base, audio: audio, language: best, vocabulary: prompt)
+            language = best
         }
-        return (Self.clean(result.text), retried)
+        return (clean(result.text), language, retried)
     }
 
-    private func infer(_ base: URL, audio: Data, language: String, vocabulary: String?, detectOnly: Bool = false) async throws -> ServerResult {
+    /// 16-bit PCM WAV, the format whisper-server reads without converting.
+    static func wav(_ samples: [Float], sampleRate: Int = 16_000) -> Data {
+        var data = Data(capacity: 44 + samples.count * 2)
+        func append<T: FixedWidthInteger>(_ value: T) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
+        let bytes = UInt32(samples.count * 2)
+        data.append(contentsOf: Array("RIFF".utf8)); append(36 + bytes)
+        data.append(contentsOf: Array("WAVEfmt ".utf8)); append(UInt32(16)); append(UInt16(1)); append(UInt16(1))
+        append(UInt32(sampleRate)); append(UInt32(sampleRate * 2)); append(UInt16(2)); append(UInt16(16))
+        data.append(contentsOf: Array("data".utf8)); append(bytes)
+        let pcm = samples.map { Int16(max(-1, min(1, $0)) * Float(Int16.max)) }
+        pcm.withUnsafeBytes { data.append(contentsOf: $0) }  // Apple silicon is little-endian, like WAV
+        return data
+    }
+
+    private static func infer(_ base: URL, audio: Data, language: String, vocabulary: String?, detectOnly: Bool = false) async throws -> ServerResult {
         var form = MultipartForm()
         form.field("response_format", "verbose_json")
         form.field("language", language)
@@ -367,6 +390,122 @@ actor WhisperServer {
             }
         }
         return bound ? Int(UInt16(bigEndian: address.sin_port)) : Int.random(in: 49_152...65_000)
+    }
+}
+
+/// Transcribes a dictation in chunks while it's still being spoken, so only the last chunk is
+/// left when the user stops. Chunks run one at a time, in order, on the same whisper-server;
+/// each gets the text before it as its prompt, so sentences carry over the cut.
+final class WhisperStream: @unchecked Sendable {
+    private let binary: String
+    private let model: String
+    private let candidates: [String]
+    private let vocabulary: String?
+
+    // Guarded by `lock`.
+    private let lock = NSLock()
+    private var chain: Task<Void, Never>?
+    private var texts: [String] = []
+    /// Fixed by the first chunk, so a dictation doesn't switch language halfway.
+    private var language: String?
+    private var failure: Error?
+    private var retriedLanguage = false
+
+    init?(whisperPath: String, model: String, candidates: [String], vocabulary: String?) {
+        guard let binary = WhisperServer.binaryPath(nextTo: whisperPath),
+              FileManager.default.fileExists(atPath: model) else { return nil }
+        self.binary = binary
+        self.model = model
+        self.candidates = candidates
+        self.vocabulary = vocabulary
+    }
+
+    /// Queues a chunk (16 kHz mono). Callable from any thread; chunks keep their arrival order.
+    func append(_ samples: [Float]) {
+        lock.withLock {
+            let previous = chain
+            chain = Task.detached(priority: .userInitiated) { [self] in
+                await previous?.value
+                await transcribe(samples)
+            }
+        }
+    }
+
+    /// Transcribes the final chunk (nil if nothing was said after the last one) and returns
+    /// the whole dictation. Throws if any chunk failed, so the caller can redo the full file.
+    func finish(tail: [Float]?) async throws -> (text: String, retriedLanguage: Bool) {
+        if let tail, !tail.isEmpty { append(tail) }
+        let last = lock.withLock { chain }
+        await last?.value
+        return try lock.withLock {
+            if let failure { throw failure }
+            return (Self.join(texts), retriedLanguage)
+        }
+    }
+
+    /// Joins chunk texts. A pause mid-sentence makes whisper end a chunk with "…" and start
+    /// the next with a capital ("Also, the... The voiceover"); undo both.
+    static func join(_ parts: [String]) -> String {
+        var result = ""
+        for part in parts {
+            var next = part
+            if !result.isEmpty {
+                result = result.replacingOccurrences(of: #"\s*(\.\.\.|…)$"#, with: "", options: .regularExpression)
+                if !(result.last.map { ".!?".contains($0) } ?? true),
+                   let word = next.split(separator: " ").first,
+                   continuationWords.contains(word.lowercased().trimmingCharacters(in: .punctuationCharacters)) {
+                    next = next.prefix(1).lowercased() + next.dropFirst()
+                }
+                result += " "
+            }
+            result += next
+        }
+        return result
+    }
+
+    /// Common words that start a chunk mid-sentence; names and "I" keep their capital.
+    private static let continuationWords: Set<String> = [
+        "the", "a", "an", "and", "but", "or", "so", "because", "which", "that", "this", "these", "those",
+        "it", "it's", "its", "we", "you", "they", "he", "she", "to", "of", "in", "on", "at", "for", "with",
+        "from", "by", "like", "also", "then", "just", "if", "when", "what", "how", "why", "where", "there",
+        "is", "are", "was", "were", "be", "been", "have", "has", "had", "do", "does", "did", "can", "could",
+        "would", "should", "will", "not", "maybe", "probably", "actually", "basically", "my", "your", "our",
+        "their", "some", "any", "all", "more", "as", "than", "about", "into", "up", "out", "now", "even",
+        "и", "а", "но", "что", "это", "как", "в", "на", "с", "по", "не", "я", "мы", "ты", "он", "она", "они",
+    ]
+
+    private static let leadIn = ["en": "Okay, here it is. ", "ru": "Хорошо, вот текст. "]
+
+    /// Skips chunks that haven't started yet.
+    func cancel() {
+        lock.withLock { if failure == nil { failure = CancellationError() } }
+    }
+
+    private func transcribe(_ samples: [Float]) async {
+        let (stopped, language, previous) = lock.withLock {
+            (failure != nil, language, Self.join(texts))
+        }
+        guard !stopped else { return }
+        let server = WhisperServer.shared
+        await server.beginUse()
+        do {
+            let base = try await server.baseURL(binary: binary, model: model)
+            // Whisper reads the prompt as the text before this audio. A punctuated lead-in keeps
+            // it punctuating: context that ends mid-sentence otherwise turns punctuation off.
+            let context = previous.isEmpty ? nil : (Self.leadIn[language ?? ""] ?? "") + previous.suffix(250)
+            let prompt = [vocabulary.map { $0 + "." }, context].compactMap { $0 }.joined(separator: " ")
+            let result = try await WhisperService.transcribe(
+                base, audio: WhisperService.wav(samples), candidates: language.map { [$0] } ?? candidates,
+                prompt: prompt.isEmpty ? nil : prompt)
+            lock.withLock {
+                if !result.text.isEmpty { texts.append(result.text) }
+                if self.language == nil { self.language = result.language }
+                if result.retried { retriedLanguage = true }
+            }
+        } catch {
+            lock.withLock { if failure == nil { failure = error } }
+        }
+        await server.endUse()
     }
 }
 

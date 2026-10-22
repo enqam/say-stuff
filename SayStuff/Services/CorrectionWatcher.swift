@@ -70,11 +70,15 @@ struct CorrectionLearningSession {
         let end = min(all.count, start + context.count + pastedWords.count + 4)
         let edits = Self.replacements(from: context + pastedWords, to: Array(all[start..<end]))
         var result: [Correction] = []
+        if edits.isEmpty { log.notice("Edit had no word replacements to learn") }
         for (old, new) in edits {
             let heard = old.joined(separator: " ")
             let term = new.joined(separator: " ")
             let key = heard.lowercased() + "\u{0}" + term.lowercased()
-            guard !learned.contains(key), isLearnable(old: heard, new: term) else { continue }
+            guard !learned.contains(key) else { continue }
+            let rejection = rejection(old: heard, new: term)
+            log.notice("Correction \(heard, privacy: .private) → \(term, privacy: .private): \(rejection ?? "learned", privacy: .public)")
+            guard rejection == nil else { continue }
             learned.insert(key)
             result.append(Correction(term: term, heardAs: heard))
         }
@@ -122,20 +126,40 @@ struct CorrectionLearningSession {
         return result
     }
 
-    private func isLearnable(old: String, new: String) -> Bool {
-        guard old.lowercased() != new.lowercased(), new.count >= 3 else { return false }
-        // Must look like a respelling of what was heard, not a different word.
-        guard Self.similarity(old.lowercased(), new.lowercased()) >= 0.45 else { return false }
+    /// Why an edit isn't learned, or nil to learn it.
+    private func rejection(old: String, new: String) -> String? {
+        guard old.lowercased() != new.lowercased() else { return "only case changed" }
+        guard new.count >= 3 else { return "too short" }
+        // Must be a respelling of what was heard, or sound like it: Parakeet writes names
+        // as ordinary words that sound right ("Quad" for "Claude").
+        guard Self.similarity(old.lowercased(), new.lowercased()) >= 0.45
+                || Self.similarity(Self.soundKey(old), Self.soundKey(new)) >= 0.6 else { return "different word" }
         // Keep explicitly listed names distinct (for example Grok and Groq).
-        guard !vocabulary.contains(old.lowercased()) else { return false }
+        guard !vocabulary.contains(old.lowercased()) else { return "replaced a dictionary word" }
         // Explicit dictionary terms remain learnable even if macOS already knows
         // their spelling. The unknown-word filter protects ordinary grammar edits.
-        if vocabulary.contains(new.lowercased()) { return true }
+        if vocabulary.contains(new.lowercased()) { return nil }
         let checker = NSSpellChecker.shared
-        return Self.words(new).contains { word in
+        let unusual = Self.words(new).contains { word in
             checker.checkSpelling(of: word, startingAt: 0).location != NSNotFound
                 || word.contains(where: \.isUppercase) && word != word.capitalized
         }
+        return unusual ? nil : "ordinary word"
+    }
+
+    /// Consonant skeleton of how a word sounds: "Quad" → "kd", "Claude" → "kld".
+    static func soundKey(_ text: String) -> String {
+        var s = text.lowercased().filter(\.isLetter)
+        for (from, to) in [("ph", "f"), ("ck", "k"), ("qu", "k"), ("gh", "g"), ("x", "ks"),
+                           ("c", "k"), ("q", "k"), ("z", "s")] {
+            s = s.replacingOccurrences(of: from, with: to)
+        }
+        var key = ""
+        for (index, char) in s.enumerated() {
+            if index > 0, "aeiouyhw".contains(char) { continue }
+            if key.last != char { key.append(char) }
+        }
+        return key
     }
 
     private static func similarity(_ a: String, _ b: String) -> Double {
@@ -262,7 +286,9 @@ final class CorrectionWatcher {
     }
 
     private func poll() {
-        guard let element, Date() < deadline, let value = Self.value(of: element), var session else {
+        guard let element, var session else { return }
+        guard Date() < deadline, let value = Self.value(of: element) else {
+            log.notice("Stopped watching: \(Date() < self.deadline ? "field unreadable" : "30 s passed", privacy: .public)")
             cancel()
             return
         }
