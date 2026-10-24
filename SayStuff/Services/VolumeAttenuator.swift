@@ -1,6 +1,5 @@
 import CoreAudio
 import AudioToolbox
-import QuartzCore
 
 /// Smoothly lowers system output volume while recording and fades it back afterwards.
 /// The original volume is persisted so a crash mid-recording can't leave the Mac quiet.
@@ -19,11 +18,16 @@ final class VolumeAttenuator {
     private let savedVolumeKey = "VolumeAttenuator_savedVolume"
     private let savedDeviceKey = "VolumeAttenuator_savedDevice"
 
+    /// Down under the start sound's tail. Back up comes in one change the moment recording
+    /// stops (see `restore`).
     private let fadeDownDuration: Double = 0.8
-    static let fadeUpDuration: Double = 0.45
-    private let tickRate: Double = 120
-    /// Bluetooth speakers get each step as a radio command; at 120 Hz some are dropped.
-    private let bluetoothTickRate: Double = 30
+    /// Every volume change makes coreaudiod apply it and ControlCenter and the WindowServer
+    /// redraw the system volume control: measured on macOS 27, ~15 ms of WindowServer time
+    /// each. Changes at 120/s for a second cost ~4 s of system CPU per dictation and halved
+    /// the frame rate of the whole screen. So the fade down takes evenly spaced steps at
+    /// `stepRate`, the most Bluetooth headphones take without dropping any: 24 over 0.8 s.
+    /// (Twelve larger ones over 0.4 s sounded choppy on AirPods.)
+    private let stepRate: Double = 30
 
     init() {
         queue.sync { recoverFromCrash() }
@@ -40,8 +44,11 @@ final class VolumeAttenuator {
         }
     }
 
-    /// Fades back to the saved volume. `completion` runs on the main queue once it's done
-    /// (immediately if nothing was attenuated).
+    /// Back to the saved volume in one change, the moment recording stops. A fade can't fit:
+    /// one still running when the done sound plays (the paste can come ~0.1 s after the stop)
+    /// changes its loudness mid-chime, and a quicker one, bunched with the mic indicator going
+    /// off, cost the outro frames (measured: 34-100 ms gaps with 3 steps, 9-20 ms with one).
+    /// `completion` runs on the main queue once it's done (immediately if nothing was attenuated).
     func restore(completion: (() -> Void)? = nil) {
         queue.async { [self] in
             pendingAttenuation?.cancel()
@@ -50,7 +57,7 @@ final class VolumeAttenuator {
                 if let completion { DispatchQueue.main.async(execute: completion) }
                 return
             }
-            fade(device: device, to: target, duration: Self.fadeUpDuration) { [self] in
+            fade(device: device, to: target, duration: 0) { [self] in
                 confirm(device: device, volume: target, attempt: 1) { [self] in
                     clearSavedState()
                     if let completion { DispatchQueue.main.async(execute: completion) }
@@ -88,31 +95,31 @@ final class VolumeAttenuator {
         fade(device: device, to: savedVolume * fraction, duration: fadeDownDuration, completion: nil)
     }
 
-    /// Eased fade from the device's *current* volume, so reversing mid-fade never jumps.
+    /// Smoothstep fade from the device's *current* volume, so reversing mid-fade never jumps:
+    /// it starts and ends with the smallest steps.
     private func fade(device: AudioDeviceID, to target: Float, duration: Double, completion: (() -> Void)?) {
         fadeTimer?.cancel()
         fadeTimer = nil
         restoreCheck?.cancel()
         restoreCheck = nil
 
-        guard let start = getVolume(device: device), abs(start - target) > 0.002 else {
+        guard duration > 0, let start = getVolume(device: device), abs(start - target) > 0.002 else {
             setVolume(device: device, volume: target)
             completion?()
             return
         }
 
-        let startTime = CACurrentMediaTime()
-        let rate = isBluetooth(device) ? bluetoothTickRate : tickRate
+        let steps = max(1, Int(duration * stepRate))
+        let interval = duration / Double(steps)
+        var step = 0
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: 1.0 / rate, leeway: .milliseconds(1))
+        timer.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(5))
         timer.setEventHandler { [weak self, weak timer] in
             guard let self, let timer else { return }
-            let t = min((CACurrentMediaTime() - startTime) / duration, 1)
-            // Coming back up, most of the volume returns early so the done sound, played
-            // as the text lands, isn't muffled; going down stays a gentle smoothstep.
-            let eased = target > start ? Float(1 - pow(1 - t, 3)) : Float(t * t * (3 - 2 * t))
-            self.setVolume(device: device, volume: start + (target - start) * eased)
-            if t >= 1 {
+            step += 1
+            let t = Float(step) / Float(steps)
+            self.setVolume(device: device, volume: start + (target - start) * t * t * (3 - 2 * t))
+            if step >= steps {
                 timer.cancel()
                 if self.fadeTimer === timer { self.fadeTimer = nil }
                 completion?()
@@ -180,18 +187,6 @@ final class VolumeAttenuator {
         mScope: kAudioDevicePropertyScopeOutput,
         mElement: kAudioObjectPropertyElementMain
     )
-
-    private func isBluetooth(_ device: AudioDeviceID) -> Bool {
-        var address = AudioObjectPropertyAddress(
-            mSelector: kAudioDevicePropertyTransportType,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var transport: UInt32 = 0
-        var size = UInt32(MemoryLayout<UInt32>.size)
-        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &transport) == noErr else { return false }
-        return transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
-    }
 
     private func getVolume(device: AudioDeviceID) -> Float? {
         var volume: Float32 = 0

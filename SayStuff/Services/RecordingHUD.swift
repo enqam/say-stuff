@@ -48,10 +48,13 @@ final class RecordingHUD {
     private var lastFrame: CFTimeInterval = 0
     private var hideWork: DispatchWorkItem?
     private var messageAction: (() -> Void)?
-    /// Where text is being typed (screen coordinates), looked up when recording starts.
-    private var caret: NSPoint?
-    private var caretLookup = 0
+    /// Bumped whenever the pill is reused, so a late answer about the pasted text is ignored.
+    private var outroLookup = 0
     private let morph = PasteMorph()
+    #if DEBUG
+    /// Where a replayed dictation's text "landed" (it pastes nothing).
+    var debugTarget: NSRect?
+    #endif
 
     init() {
         panel = NSPanel(
@@ -202,8 +205,9 @@ final class RecordingHUD {
         cancelHide()
         setAction(nil)
         morph.cancel()
+        outroLookup += 1
         mode = .recording
-        locateCaret()
+        CaretLocator.warmUp()
         smoothed = 0
         pendingPeak = 0
         history = history.map { _ in 0 }
@@ -287,14 +291,6 @@ final class RecordingHUD {
         CATransaction.commit()
         startShimmer()
         present()
-        // The pill flies to the cursor while transcription runs, so the drop is already
-        // there when the text and the done sound land.
-        if let caret, let start = pillScreenFrame, let screen = panel.screen {
-            morph.begin(from: start, toward: caret, content: waveformCopy(), on: screen)
-            panel.orderOut(nil)
-            stopShimmer()
-            dot.removeAllAnimations()
-        }
     }
 
     /// `action` makes the message clickable (e.g. undo).
@@ -302,6 +298,7 @@ final class RecordingHUD {
         cancelHide()
         setAction(action)
         morph.cancel()
+        outroLookup += 1
         mode = .message
         stopShimmer()
         dot.removeAllAnimations()
@@ -326,28 +323,44 @@ final class RecordingHUD {
         scheduleHide(after: duration)
     }
 
-    /// `pasted`: the text just pasted, which the pill flows onto.
+    /// `pasted`: the text just pasted, which the pill stretches over. It stays put, still
+    /// shimmering, until the text's place is known (~25-50 ms after the paste).
     func hide(pasted: String? = nil) {
         cancelHide()
         setAction(nil)
         guard mode != .hidden else { return }
         let wasProcessing = mode == .processing
         mode = .hidden
-        if morph.isRunning {
-            if let pasted { morph.land(pasted: pasted) } else { morph.dissolve() }
+        guard let pasted, wasProcessing, panel.isVisible else {
+            fadeOut()
             return
         }
-        // The pill flows only once there's text, so an empty result never sends it anywhere.
-        if let pasted, wasProcessing, panel.isVisible, let start = pillScreenFrame, let screen = panel.screen {
-            morph.begin(from: start, toward: caret, content: waveformCopy(), on: screen)
-            morph.land(pasted: pasted)
-            panel.orderOut(nil)
-            stopShimmer()
-            dot.removeAllAnimations()
+        outroLookup += 1
+        let lookup = outroLookup
+        #if DEBUG
+        if let target = debugTarget {
+            debugTarget = nil
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { self.stretch(over: target, lookup: lookup) }
             return
         }
-        morph.cancel()
-        fadeOut()
+        #endif
+        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+            let target = CaretLocator.pastedTextFrame(pasted)
+            DispatchQueue.main.async { self?.stretch(over: target, lookup: lookup) }
+        }
+    }
+
+    /// Hands the pill to the outro, or fades it where it is when the text can't be found.
+    private func stretch(over text: NSRect?, lookup: Int) {
+        guard outroLookup == lookup, mode == .hidden else { return }
+        guard let text, let start = pillScreenFrame, let screen = panel.screen else {
+            fadeOut()
+            return
+        }
+        morph.stretch(from: start, over: text, content: waveformCopy(), on: screen)
+        panel.orderOut(nil)
+        stopShimmer()
+        dot.removeAllAnimations()
     }
 
     private func fadeOut() {
@@ -444,20 +457,6 @@ final class RecordingHUD {
         return CATransform3DTranslate(transform, -dx, -dy, 0)
     }
 
-    /// Looks up the text cursor off the main thread; Accessibility calls into other apps can block.
-    private func locateCaret() {
-        caretLookup += 1
-        let lookup = caretLookup
-        caret = nil
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let point = CaretLocator.caretPoint()
-            DispatchQueue.main.async {
-                guard let self, self.caretLookup == lookup else { return }
-                self.caret = point
-            }
-        }
-    }
-
     /// Just above a visible Dock; with an auto-hiding Dock, low near the screen edge.
     private static func baseline(on screen: NSScreen) -> CGFloat {
         let reserved = screen.visibleFrame.minY - screen.frame.minY
@@ -522,9 +521,9 @@ private final class AppearanceAwareView: NSView {
     /// layer keeps the lens clear and refracting; the glass's own tint frosts it.
     private let shade = CAGradientLayer()
     /// Overrides the capsule's radius (the outro reshapes it into a rounded rect).
-    var cornerRadius: CGFloat? { didSet { needsLayout = true } }
+    var cornerRadius: CGFloat? { didSet { if cornerRadius != oldValue { needsLayout = true } } }
     /// Light mode's smoke, scaled (the outro clears it as it lands on text).
-    var shadeOpacity: Float = 1 { didSet { shade.opacity = shadeOpacity } }
+    var shadeOpacity: Float = 1 { didSet { if shadeOpacity != oldValue { shade.opacity = shadeOpacity } } }
 
     func addRim() {
         guard let layer else { return }
@@ -578,58 +577,22 @@ private final class AppearanceAwareView: NSView {
 }
 
 
-/// Finds the text cursor through Accessibility. Off the main thread only.
+/// Finds the pasted text through Accessibility. Off the main thread only.
 private enum CaretLocator {
     private static let log = Logger(subsystem: "com.saystuff.app", category: "caret")
 
-    static func caretPoint() -> NSPoint? {
-        // Chromium and Electron apps only build their accessibility tree when asked, and the
-        // first query can take a few hundred ms. This runs while the user talks, so wait.
-        if let app = NSWorkspace.shared.frontmostApplication {
+    /// Chromium and Electron apps only build their accessibility tree when asked, and the
+    /// first query can take a few hundred ms; asking while the user talks keeps the lookup
+    /// after the paste quick.
+    static func warmUp() {
+        DispatchQueue.global(qos: .utility).async {
+            guard AXIsProcessTrusted(), let app = NSWorkspace.shared.frontmostApplication else { return }
             let element = AXUIElementCreateApplication(app.processIdentifier)
             AXUIElementSetAttributeValue(element, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+            AXUIElementSetMessagingTimeout(element, 0.6)
+            var focused: AnyObject?
+            AXUIElementCopyAttributeValue(element, kAXFocusedUIElementAttribute as CFString, &focused)
         }
-        let system = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(system, 0.6)
-        var focused: AnyObject?
-        let status = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
-        guard status == .success, let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else {
-            log.notice("No focused element (\(status.rawValue))")
-            return nil
-        }
-        let element = focused as! AXUIElement
-        AXUIElementSetMessagingTimeout(element, 0.6)
-        let field = frame(of: element)
-
-        var value: AnyObject?
-        var selection = CFRange()
-        if AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &value) == .success,
-           let value, CFGetTypeID(value) == AXValueGetTypeID(),
-           AXValueGetValue(value as! AXValue, .cfRange, &selection) {
-            // The caret's own (empty) range often has no bounds; the character before it does.
-            // Chromium can answer with the whole field instead; that doesn't count.
-            let candidates = [(CFRange(location: selection.location, length: 0), false),
-                              (CFRange(location: max(0, selection.location - 1), length: 1), true)]
-            for (range, atEnd) in candidates {
-                if let rect = bounds(of: range, in: element), rect.height < 60, rect != field {
-                    log.notice("Caret from text bounds")
-                    return point(x: atEnd ? rect.maxX : rect.minX, midY: rect.midY)
-                }
-            }
-        }
-        log.debug("Field \(role(of: element), privacy: .public): selection \(selection.location)+\(selection.length)")
-        // Chromium answers range bounds only on the static text runs inside the field.
-        if selection.location > 0, let rect = runBounds(of: NSRange(location: selection.location - 1, length: 1), in: element) {
-            log.notice("Caret from a text run")
-            return point(x: rect.maxX, midY: rect.midY)
-        }
-        // No cursor bounds: aim at the start of the field's first line.
-        if let field, field.height < 400 {
-            log.notice("Caret from the field frame")
-            return point(x: field.minX + 14, midY: field.minY + min(field.height / 2, 14))
-        }
-        log.notice("No caret position")
-        return nil
     }
 
     /// Where the just-pasted `text` sits (AppKit coordinates), checked against the field's
@@ -739,12 +702,6 @@ private enum CaretLocator {
         return found
     }
 
-    private static func role(of element: AXUIElement) -> String {
-        var role: AnyObject?
-        AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
-        return role as? String ?? "?"
-    }
-
     private static func frame(of element: AXUIElement) -> CGRect? {
         var position: AnyObject?, size: AnyObject?
         guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
@@ -755,31 +712,19 @@ private enum CaretLocator {
               AXValueGetValue(size as! AXValue, .cgSize, &dimensions), dimensions.height > 0 else { return nil }
         return CGRect(origin: origin, size: dimensions)
     }
-
-    /// Accessibility uses top-left origin coordinates; AppKit uses bottom-left.
-    private static func point(x: CGFloat, midY: CGFloat) -> NSPoint {
-        let top = NSScreen.screens.first?.frame.maxY ?? 0
-        return NSPoint(x: x, y: top - midY)
-    }
 }
 
-/// Outro. When transcription starts the pill flows to the text cursor and waits there as a
-/// small glass drop, so the moment the text lands it only has to spread over it: it
-/// stretches over exactly the pasted text like a skin, clears to an outline and fades.
-/// Without text bounds it pours into the cursor after the text instead. If the cursor is
-/// unknown the pill stays put until the paste and flows from there.
+/// Outro. Once the text is pasted and its place on screen is known, the pill stretches
+/// straight into a box over exactly the pasted text, in one motion, clears to an outline and
+/// fades. Until then the pill stays where it is.
 ///
 /// The glass can't be animated on the render server (its shape layers rebuild on layout), so
-/// a display link steps springs and reshapes a copy of the pill each frame. The link pauses
-/// while the drop waits, and the copy is built while you talk so its first frame is ready.
-/// Retargeting keeps each spring's velocity, so a late answer bends the motion, never jerks it.
+/// a display link steps springs and reshapes a copy of the pill each frame. The copy is built
+/// while you talk so its first frame is ready.
 private final class PasteMorph: NSObject {
-    /// After landing: fade once settled, or at the latest this long after the paste.
-    private static let settle: CFTimeInterval = 0.06
+    /// Fade once it sits on the text, or at the latest this long after the stretch began.
+    private static let latestFade: CFTimeInterval = 0.35
     private static let fadeLength: CFTimeInterval = 0.12
-    private static let latestFade: CFTimeInterval = 0.2
-    /// The drop that waits at the cursor.
-    private static let dropSize = NSSize(width: 30, height: 22)
     private static let trace = Logger(subsystem: "com.saystuff.app", category: "morph")
 
     private lazy var overlay: NSPanel = {
@@ -805,8 +750,7 @@ private final class PasteMorph: NSObject {
         edgeMask.addSublayer(outside)
         edgeMask.addSublayer(interiorFill)
         edgeMask.addSublayer(edgeRing)
-        blob.autoresizingMask = [.width, .height]
-        holder.addSubview(blob)
+        holder.addSubview(blob)  // sized by `apply`, never autoresized
         root.addSubview(holder)
         return panel
     }()
@@ -862,14 +806,11 @@ private final class PasteMorph: NSObject {
             velocity += force * dt
             value += velocity * dt
         }
-        var settled: Bool { abs(value - target) < 0.5 && abs(velocity) < 20 }
     }
 
     private var generation = 0
     private var link: CADisplayLink?
     private var began: CFTimeInterval = 0, lastTick: CFTimeInterval = 0
-    /// Set once the text is pasted; landing clears the middle and then fades.
-    private var landedAt: CFTimeInterval?
     private var fadeFrom: CFTimeInterval?
     private var springs: [Spring] = []
     private var targetRadius: CGFloat = 0
@@ -881,81 +822,48 @@ private final class PasteMorph: NSObject {
     /// The pill's dot and bars as they were at the hand-off; they shrink with it and fade.
     private var content: CALayer?
     private var contentSize = CGSize.zero
+    /// The glass's shape as last laid out (in whole pixels). Reshaping the glass re-renders
+    /// its internals (~2 ms a frame, measured); moving it doesn't, so frames that only move skip it.
+    private var shownSize = NSSize.zero, shownRadius: CGFloat = -1, shownSubtlety: CGFloat = -1
+    #if DEBUG
+    private var frames = 0, longestGap: CFTimeInterval = 0, longestGapAt: CFTimeInterval = 0, busy: CFTimeInterval = 0
+    #endif
 
     /// Builds the copy at the pill's place, invisible, so its glass is ready to take over.
     func prepare(at pill: NSRect, on screen: NSScreen) {
         guard !isRunning else { return }
         screenFrame = screen.frame
+        overlay.setFrame(Self.padded(pill, on: screenFrame), display: false)
         reset(to: pill)
+        apply()
         overlay.alphaValue = 0
         overlay.orderFrontRegardless()
     }
 
-    /// Takes over from the pill (`start`, screen coordinates) and flows to `caret`, or waits
-    /// in the pill's place without one. The caller hides the pill in the same turn.
-    func begin(from start: NSRect, toward caret: NSPoint?, content: CALayer?, on screen: NSScreen) {
+    /// Takes over from the pill (`pill`, screen coordinates) and stretches it over `text`.
+    /// The caller hides the pill in the same turn.
+    func stretch(from pill: NSRect, over text: NSRect, content: CALayer?, on screen: NSScreen) {
         generation += 1
         isRunning = true
         screenFrame = screen.frame
-        reset(to: start)
+        reset(to: pill)
+        // Room for the whole path at once: resizing mid-motion moves the window and its
+        // contents on different frames (a sideways jump).
+        let target = text.insetBy(dx: -(Self.bezel + Self.feather), dy: -(Self.bezel + Self.feather))
+        overlay.setFrame(Self.padded(pill.union(target), on: screenFrame), display: false)
+        // The fade ends where the text starts, so no letter sits under the glass.
+        let goals = [target.midX, target.midY, target.width, target.height]
+        for index in springs.indices { springs[index].target = goals[index] }
+        targetRadius = min(12, target.height / 2, target.width / 2)
         if let content {
             content.anchorPoint = CGPoint(x: 0.5, y: 0.5)
             contentSize = content.bounds.size
             face.layer?.addSublayer(content)
             self.content = content
-            apply()
         }
-        if let caret {
-            // Room for the text around the cursor too, so the window rarely grows mid-flight:
-            // a resize moves the window and its contents on different frames (a sideways jump).
-            let around = NSRect(x: caret.x - 600, y: caret.y - 250, width: 1200, height: 500)
-            overlay.setFrame(overlay.frame.union(Self.padded(around, on: screenFrame)), display: false)
-            aim(at: NSRect(x: caret.x - Self.dropSize.width / 2, y: caret.y - Self.dropSize.height / 2,
-                           width: Self.dropSize.width, height: Self.dropSize.height), padded: false)
-        }
+        apply()
         overlay.alphaValue = 1
         overlay.orderFrontRegardless()
-        startLink()
-    }
-
-    /// The text is in: find it and spread over it.
-    func land(pasted text: String) {
-        guard isRunning else { return }
-        let run = generation
-        landedAt = CACurrentMediaTime()
-        // Head for the cursor at landing speed until the text's bounds arrive.
-        for index in springs.indices {
-            springs[index].omega = index < 2 ? 40 : 32
-            springs[index].zeta = index < 2 ? 0.85 : 0.7
-        }
-        startLink()
-        DispatchQueue.global(qos: .userInteractive).async { [weak self] in
-            let target = CaretLocator.pastedTextFrame(text) ?? CaretLocator.caretPoint().map(Self.sliver)
-            DispatchQueue.main.async {
-                guard let self, self.generation == run else { return }
-                if let target { self.aim(at: target, padded: true) } else { self.fadeFrom = CACurrentMediaTime() }
-                self.startLink()
-            }
-        }
-    }
-
-    #if DEBUG
-    /// Lands on a known rect without Accessibility, `delay` after the paste (like the lookup).
-    func debugLand(on target: NSRect, after delay: TimeInterval) {
-        guard isRunning else { return }
-        landedAt = CACurrentMediaTime()
-        startLink()
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-            self?.aim(at: target, padded: true)
-            self?.startLink()
-        }
-    }
-    #endif
-
-    /// Nothing was pasted: fade where it is.
-    func dissolve() {
-        guard isRunning else { cancel(); return }
-        if fadeFrom == nil { fadeFrom = CACurrentMediaTime() }
         startLink()
     }
 
@@ -969,18 +877,24 @@ private final class PasteMorph: NSObject {
         link = nil
         isRunning = false
         overlay.orderOut(nil)
+        #if DEBUG
+        if frames > 0 {
+            Self.trace.notice("outro: \(self.frames) frames, longest gap \(Int(self.longestGap * 1000))ms at \(Int(self.longestGapAt * 1000))ms, main thread \(Int(self.busy * 1000))ms")
+        }
+        frames = 0
+        longestGap = 0
+        busy = 0
+        #endif
     }
 
     private func reset(to rect: NSRect) {
-        overlay.setFrame(Self.padded(rect, on: screenFrame), display: false)
-        springs = [
-            Spring(value: rect.midX, target: rect.midX, omega: 30, zeta: 0.85),
-            Spring(value: rect.midY, target: rect.midY, omega: 30, zeta: 0.85),
-            Spring(value: rect.width, target: rect.width, omega: 24, zeta: 0.7),
-            Spring(value: rect.height, target: rect.height, omega: 24, zeta: 0.7),
-        ]
+        // Position and size share one spring, so every edge arrives together: the pill
+        // stretches into the box rather than travelling and then growing. ~0.15 s to look
+        // there, settled in ~0.3 s, a hair of overshoot.
+        springs = [rect.midX, rect.midY, rect.width, rect.height].map {
+            Spring(value: $0, target: $0, omega: 30, zeta: 0.85)
+        }
         targetRadius = rect.height / 2
-        landedAt = nil
         fadeFrom = nil
         flight = 0
         openness = 0
@@ -989,7 +903,8 @@ private final class PasteMorph: NSObject {
         began = CACurrentMediaTime()
         if #available(macOS 26.0, *), blob is LensGlassView { face.onAppearanceChange?() }
         blob.alphaValue = 1
-        apply()
+        shownRadius = -1
+        shownSubtlety = -1
     }
 
     private func startLink() {
@@ -1002,94 +917,89 @@ private final class PasteMorph: NSObject {
         lastTick = CACurrentMediaTime()
     }
 
-    /// A thin upright capsule the size of a text cursor.
-    private static func sliver(at point: NSPoint) -> NSRect {
-        NSRect(x: point.x - 3, y: point.y - 10, width: 6, height: 20)
-    }
-
     /// The overlay covers only where the shape moves (plus room for overshoot), not the screen.
     private static func padded(_ rect: NSRect, on screen: NSRect) -> NSRect {
         rect.insetBy(dx: -40, dy: -40).intersection(screen).integral
     }
 
-    /// `padded`: room around text for the bezel and its fade, so they sit outside the letters.
-    private func aim(at target: NSRect, padded: Bool) {
-        // The fade ends where the text starts, so no letter sits under the glass.
-        let pad = padded ? Self.bezel + Self.feather : 0
-        let rect = target.insetBy(dx: -pad, dy: -pad)
-        let goals = [rect.midX, rect.midY, rect.width, rect.height]
-        for index in springs.indices { springs[index].target = goals[index] }
-        targetRadius = padded ? min(12, rect.height / 2, rect.width / 2) : rect.height / 2
-        // Toward the cursor it arrives in ~0.2 s, about one local transcription, so the drop
-        // is waiting when the text lands. Landing is quick.
-        for index in springs.indices {
-            springs[index].omega = padded ? (index < 2 ? 40 : 32) : (index < 2 ? 22 : 20)
-            springs[index].zeta = padded ? (index < 2 ? 0.85 : 0.7) : 1
-        }
-        let area = overlay.frame.union(Self.padded(rect, on: screenFrame))
-        if area != overlay.frame { overlay.setFrame(area, display: false) }
-    }
-
     @objc private func step(_ link: CADisplayLink) {
+        #if DEBUG
+        let work = CACurrentMediaTime()
+        #endif
         let now = link.targetTimestamp
-        let dt = min(1.0 / 30, max(0, now - lastTick))
+        // Real elapsed time, so a missed frame doesn't make the rest of the motion late.
+        let dt = min(0.1, max(0, now - lastTick))
+        #if DEBUG
+        frames += 1
+        if dt > longestGap { longestGap = dt; longestGapAt = now - began }
+        defer { busy += CACurrentMediaTime() - work }
+        #endif
         lastTick = now
-        let substeps = 4
+        // Substeps of at most 4 ms keep the stiffest spring stable.
+        let substeps = max(1, Int((dt / 0.004).rounded(.up)))
         for _ in 0..<substeps {
             for index in springs.indices { springs[index].step(CGFloat(dt) / CGFloat(substeps)) }
         }
         let distance = hypot(springs[0].target - springs[0].value, springs[1].target - springs[1].value)
-        let openGoal: CGFloat = landedAt == nil ? 0 : 1 - min(1, distance / 40)
+        // Solid while it travels; the middle clears as it closes in on the text.
+        let openGoal: CGFloat = 1 - min(1, distance / 40)
         openness += (openGoal - openness) * (1 - exp(-CGFloat(dt) / 0.05))
         flight += (1 - flight) * (1 - exp(-CGFloat(dt) / 0.1))
-        let settled = springs.allSatisfy(\.settled) && abs(openGoal - openness) < 0.01
-        if let landedAt, fadeFrom == nil,
-           now - landedAt > Self.latestFade || (now - landedAt > Self.settle && settled) {
-            fadeFrom = now
-        }
+        // On the text: within 1.5 pt (the spring's last half point takes another ~0.2 s).
+        let arrived = springs.allSatisfy { abs($0.value - $0.target) < 1.5 } && openness > 0.9
+        if fadeFrom == nil, arrived || now - began > Self.latestFade { fadeFrom = now }
         if let fadeFrom {
             let fade = min(1, (now - fadeFrom) / Self.fadeLength)
             guard fade < 1 else { stop(); return }
             blob.alphaValue = 1 - fade * fade * (3 - 2 * fade)
         }
         apply()
-        #if DEBUG
-        Self.trace.notice("""
-            frame t=\(Int((now - self.began) * 1000))ms x=\(Int(self.springs[0].value)) y=\(Int(self.springs[1].value)) \
-            w=\(Int(self.springs[2].value)) h=\(Int(self.springs[3].value)) tx=\(Int(self.springs[0].target)) \
-            ty=\(Int(self.springs[1].target)) landed=\(self.landedAt.map { Int((now - $0) * 1000) } ?? -1) \
-            alpha=\(String(format: "%.2f", self.blob.alphaValue), privacy: .public) win=\(Int(self.overlay.frame.minX)),\(Int(self.overlay.frame.minY)),\(Int(self.overlay.frame.width))
-            """)
-        #endif
-        // Waiting at the cursor: nothing moves, so stop the frames until the paste.
-        if settled, landedAt == nil, fadeFrom == nil { link.isPaused = true }
     }
 
     private func apply() {
-        let size = NSSize(width: max(2, springs[2].value), height: max(2, springs[3].value))
+        // Whole device pixels: finer changes don't show, and each reshape costs a re-render.
+        let scale = overlay.backingScaleFactor
+        func pixels(_ value: CGFloat) -> CGFloat { (value * scale).rounded() / scale }
+        let size = NSSize(width: pixels(max(2, springs[2].value)), height: pixels(max(2, springs[3].value)))
         let rect = NSRect(x: springs[0].value - size.width / 2, y: springs[1].value - size.height / 2,
                           width: size.width, height: size.height)
         // Solid and round while travelling or waiting; once landing, the middle clears and the
         // corners take the target's shape as it closes in.
         let travel = 1 - openness
-        let radius = min(max(targetRadius, size.height / 2 * travel), size.height / 2, size.width / 2)
+        let radius = pixels(min(max(targetRadius, size.height / 2 * travel), size.height / 2, size.width / 2))
         // Light mode's smoke eases off in flight so the drop stays clear glass. On the outline
         // a trace of it stays, faintly tinting the edge (the mask feathers it toward the middle).
         let airborne = 1 - 0.65 * flight
         let smoke = airborne + (0.3 - airborne) * openness
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        blob.frame = CGRect(origin: .zero, size: size)
-        if #available(macOS 26.0, *), let glass = blob as? LensGlassView {
-            glass.cornerRadius = radius
-        } else {
-            face.layer?.cornerRadius = radius
-        }
-        face.cornerRadius = radius
-        face.shadeOpacity = Float(smoke)
         // The pill's strong lens flips the text it crosses, which strobes as it moves over
         // lines (measured frame by frame), so it calms down as it leaves the HUD.
-        if #available(macOS 26.0, *), let glass = blob as? LensGlassView { glass.subtlety = max(openness, min(1, flight * 3)) }
+        let subtlety = (max(openness, min(1, flight * 3)) * 50).rounded() / 50
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        // The holder first: resizing it after the glass re-laid the glass out a second time
+        // at commit, a frame's resize off (seen in samples as two glass renders a frame).
+        holder.frame = rect.offsetBy(dx: -overlay.frame.minX, dy: -overlay.frame.minY)
+        if size != shownSize || radius != shownRadius {
+            shownSize = size
+            shownRadius = radius
+            shownSubtlety = subtlety
+            blob.frame = CGRect(origin: .zero, size: size)
+            if #available(macOS 26.0, *), let glass = blob as? LensGlassView {
+                glass.cornerRadius = radius
+                glass.subtlety = subtlety
+            } else {
+                face.layer?.cornerRadius = radius
+            }
+            face.cornerRadius = radius
+            layoutShape(size: size, radius: radius)
+            blob.layoutSubtreeIfNeeded()  // the glass re-applies its look as it lays out
+        } else if subtlety != shownSubtlety, #available(macOS 26.0, *), let glass = blob as? LensGlassView {
+            shownSubtlety = subtlety
+            glass.subtlety = subtlety
+            glass.applyLook()
+        }
+        face.shadeOpacity = Float(smoke)
+        if interiorFill.opacity != Float(travel) { interiorFill.opacity = Float(travel) }
         if let content {
             // The dot and bars stay centered, shrink with the shape and fade early on.
             let scale = min(1, size.width / max(1, contentSize.width), size.height / max(1, contentSize.height))
@@ -1099,13 +1009,11 @@ private final class PasteMorph: NSObject {
             content.opacity = Float(1 - t * t * (3 - 2 * t))
             if t >= 1 { content.removeFromSuperlayer(); self.content = nil }
         }
-        holder.frame = rect.offsetBy(dx: -overlay.frame.minX, dy: -overlay.frame.minY)
-        layoutMask(size: size, radius: radius, interior: travel)
-        blob.layoutSubtreeIfNeeded()
         CATransaction.commit()
     }
 
-    private func layoutMask(size: NSSize, radius: CGFloat, interior: CGFloat) {
+    /// The mask's shape for the glass's current size and corners.
+    private func layoutShape(size: NSSize, radius: CGFloat) {
         let bounds = CGRect(origin: .zero, size: size)
         edgeMask.frame = bounds
         let around = CGMutablePath()
@@ -1114,7 +1022,6 @@ private final class PasteMorph: NSObject {
         outside.path = around
         interiorFill.frame = bounds
         interiorFill.cornerRadius = radius
-        interiorFill.opacity = Float(interior)
         // The ring image is drawn for the landing shape; in flight the solid middle hides it.
         let scale = overlay.backingScaleFactor
         if ringRadius != targetRadius, let image = Self.edgeImage(radius: targetRadius, scale: scale) {
@@ -1229,17 +1136,18 @@ private final class LensGlassView: NSGlassEffectView {
 
 #if DEBUG
 extension RecordingHUD {
-    /// Replays the outro against a fixed caret and text rect (screen coordinates), for
-    /// recording it frame by frame: `defaults`-free, triggered by a distributed notification.
-    func debugOutro(caret point: NSPoint, text: NSRect, transcribe: TimeInterval, lookup: TimeInterval) {
+    /// Replays the outro onto a fixed text rect (screen coordinates): processing for
+    /// `transcribe` seconds, then the paste, and the text found `lookup` later. Triggered by
+    /// the distributed notification `com.saystuff.debugOutro` with "x,y,w,h,transcribe,lookup".
+    func debugOutro(text: NSRect, transcribe: TimeInterval, lookup: TimeInterval) {
         showRecording()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-            self.caretLookup += 1
-            self.caret = point
             self.showProcessing()
             DispatchQueue.main.asyncAfter(deadline: .now() + transcribe) {
                 self.mode = .hidden
-                self.morph.debugLand(on: text, after: lookup)
+                self.outroLookup += 1
+                let run = self.outroLookup
+                DispatchQueue.main.asyncAfter(deadline: .now() + lookup) { self.stretch(over: text, lookup: run) }
             }
         }
     }
@@ -1248,9 +1156,8 @@ extension RecordingHUD {
         DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.saystuff.debugOutro"),
                                                             object: nil, queue: .main) { [weak self] note in
             let v = (note.object as? String ?? "").split(separator: ",").compactMap { Double($0) }
-            guard v.count == 8 else { return }
-            self?.debugOutro(caret: NSPoint(x: v[0], y: v[1]), text: NSRect(x: v[2], y: v[3], width: v[4], height: v[5]),
-                             transcribe: v[6], lookup: v[7])
+            guard v.count == 6 else { return }
+            self?.debugOutro(text: NSRect(x: v[0], y: v[1], width: v[2], height: v[3]), transcribe: v[4], lookup: v[5])
         }
     }
 

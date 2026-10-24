@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import AVFoundation
 import Carbon.HIToolbox
+import os
 
 /// Owns the record → transcribe → format → paste loop and everything the user sees/hears while it runs.
 @MainActor
@@ -49,6 +50,11 @@ final class DictationController: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
     /// Mics connected at the last device change; nil until the first one, so launch isn't a plug-in.
     private var connectedMicrophoneUIDs: Set<String>?
+    #if DEBUG
+    /// A replayed dictation: transcribes this instead of the mic, and pastes and saves nothing.
+    fileprivate var debugRecording: Recording?
+    fileprivate var debugDry = false
+    #endif
 
     /// Recordings shorter than this (after silence trimming) are accidental taps.
     private let minimumDuration: TimeInterval = 0.3
@@ -68,6 +74,10 @@ final class DictationController: ObservableObject {
 
     func start() {
         RecordingArchive.prune()
+        _ = DictionaryStore.shared
+        #if DEBUG
+        listenForDebugDictation()
+        #endif
         settingsManager.$settings
             .map(\.hotkey)
             .removeDuplicates()
@@ -292,6 +302,10 @@ final class DictationController: ObservableObject {
 
         recorder.stop(trace: trace) { [weak self] recording in
             guard let self else { return }
+            var recording = recording
+            #if DEBUG
+            if let replay = self.debugRecording { recording = replay; self.debugRecording = nil }
+            #endif
             guard let recording, recording.containsSpeech, recording.duration >= self.minimumDuration else {
                 stream?.cancel()
                 if let recording {
@@ -370,7 +384,7 @@ final class DictationController: ObservableObject {
         let groqKey: String?
         let profile: Profile?
         let vocabulary: String?
-        let fixWords: (String) -> String
+        let fixWords: @Sendable (String) async -> String
         let removeFillers: Bool
         let local: WhisperService.Request
         let localModel: WhisperModel
@@ -407,7 +421,7 @@ final class DictationController: ObservableObject {
             groqKey: keys.key(.groq),
             profile: ProfileStore.shared.profile(id: settings.activeProfileID),
             vocabulary: DictionaryStore.shared.vocabularyPrompt,
-            fixWords: DictionaryStore.shared.replacer(),
+            fixWords: DictionaryStore.shared.replacer,
             removeFillers: settings.removeFillers,
             local: WhisperService.Request(
                 audioURL: recording.url,
@@ -433,7 +447,14 @@ final class DictationController: ObservableObject {
             defer {
                 self.pendingJobs -= 1
                 self.settle()
+                trace.mark("job.settled")
             }
+            #if DEBUG
+            let dry = self.debugDry
+            self.debugDry = false
+            #else
+            let dry = false
+            #endif
             do {
                 var outcome = try await work.value
                 trace.mark("job.resultOnMain")
@@ -441,11 +462,14 @@ final class DictationController: ObservableObject {
                 defer {
                     outcome.metric.totalSeconds = Date().timeIntervalSince(job.stoppedAt)
                     trace.mark("job.finished")
-                    Telemetry.shared.record(outcome.metric)
+                    if !dry { Telemetry.shared.record(outcome.metric) }
                 }
                 let text = self.finalize(outcome.text)
-                RecordingArchive.note(text.isEmpty ? "[no text]" : text, for: job.recording.url)
-                if !text.isEmpty {
+                #if DEBUG
+                if dry { Logger(subsystem: "com.saystuff.app", category: "debug").notice("Dry run text: \(text, privacy: .public)") }
+                #endif
+                if !dry { RecordingArchive.note(text.isEmpty ? "[no text]" : text, for: job.recording.url) }
+                if !text.isEmpty, !dry {
                     Self.recordSpeech(outcome, recording: job.recording, recordingSeconds: recordingSeconds,
                                       target: target, candidates: job.candidates, profile: job.profile?.name)
                 }
@@ -457,7 +481,7 @@ final class DictationController: ObservableObject {
                 }
                 // Nowhere to type: paste as soon as a field is clicked; after a few seconds
                 // leave it on the clipboard instead.
-                if await job.focus.value == .none {
+                if !dry, await job.focus.value == .none {
                     self.notify("Click a text field to paste", symbol: "cursorarrow.click", duration: Self.focusWait)
                     if await !Self.waitForTextField() {
                         self.pasteService.copy(text)
@@ -471,8 +495,9 @@ final class DictationController: ObservableObject {
                 print("[Dictation] \(outcome.source): \(String(format: "%.2f", latency))s from stop to paste")
                 // Paste first; saving history writes to disk.
                 // Not sure a field had focus: keep the text on the clipboard so ⌘V recovers a miss.
-                let pasted = self.pasteService.paste(text, keepOnClipboard: await job.focus.value != .text, trace: trace)
-                self.playDoneSound()
+                let pasted = dry ? .pasted
+                    : self.pasteService.paste(text, keepOnClipboard: await job.focus.value != .text, trace: trace)
+                if !dry { self.playDoneSound() }
                 trace.mark("paste.soundStarted")
                 // The outro starts with the paste, before anything else.
                 let flows = pasted == .pasted && outcome.note == nil && self.pendingJobs <= 1 && !self.isRecording
@@ -483,6 +508,7 @@ final class DictationController: ObservableObject {
                 // outro's first frames and froze it for 30-170 ms; they wait until it has landed.
                 let learn = pasted != .copiedOnly && self.settings.learnCorrections
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.outroLength) {
+                    guard !dry else { return }
                     TranscriptionStore.shared.add(text.trimmingCharacters(in: .whitespaces), source: outcome.source, seconds: latency)
                     trace.mark("history.finished")
                     if learn {
@@ -607,7 +633,7 @@ final class DictationController: ObservableObject {
         job.trace.mark("job.transcriptionFinished")
         let spoken = text
         if job.removeFillers { text = TextCleanup.removeDisfluencies(text) }
-        text = job.fixWords(text)
+        text = await job.fixWords(text)
 
         if let profile = job.profile, !text.isEmpty {
             let formatStart = Date()
@@ -616,7 +642,7 @@ final class DictationController: ObservableObject {
                 do {
                     let result = try await GroqFormatter().format(text, profile: profile, vocabulary: job.vocabulary, key: key)
                     if GroqFormatter.looksLikeRewrite(result.text, of: text) {
-                        text = job.fixWords(result.text)
+                        text = await job.fixWords(result.text)
                     } else {
                         print("[Dictation] Formatter answered instead of rewriting; pasting as spoken: \(result.text)")
                         notes.append("\(profile.name) changed too much — pasted as spoken")
@@ -794,3 +820,42 @@ final class SoundPlayer {
         return transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
     }
 }
+
+#if DEBUG
+extension DictationController {
+    /// Replays a dictation of a speech file (16 kHz mono) through the real recorder, HUD and
+    /// engine, pasting and saving nothing: `com.saystuff.debugDictate` with
+    /// "path,seconds,x,y,w,h", the last four where the text "lands" (screen coordinates).
+    func listenForDebugDictation() {
+        DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.saystuff.debugDictate"),
+                                                            object: nil, queue: .main) { note in
+            let parts = (note.object as? String ?? "").split(separator: ",").map(String.init)
+            let numbers = parts.dropFirst().compactMap(Double.init)
+            guard parts.count == 6, numbers.count == 5, let recording = Self.debugLoad(URL(fileURLWithPath: parts[0])) else { return }
+            let text = NSRect(x: numbers[1], y: numbers[2], width: numbers[3], height: numbers[4])
+            Task { @MainActor in
+                DictationController.shared.debugDictate(recording, seconds: numbers[0], text: text)
+            }
+        }
+    }
+
+    private func debugDictate(_ recording: Recording, seconds: TimeInterval, text: NSRect) {
+        guard !isRecording else { return }
+        begin()
+        hud.debugTarget = text
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            self.debugRecording = recording
+            self.debugDry = true
+            self.finish()
+        }
+    }
+
+    nonisolated private static func debugLoad(_ url: URL) -> Recording? {
+        guard let file = try? AVAudioFile(forReading: url), file.processingFormat.sampleRate == 16_000,
+              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)),
+              (try? file.read(into: buffer)) != nil, let channel = buffer.floatChannelData?[0] else { return nil }
+        let samples = Array(UnsafeBufferPointer(start: channel, count: Int(buffer.frameLength)))
+        return Recording(url: url, duration: Double(samples.count) / 16_000, containsSpeech: true, samples: samples)
+    }
+}
+#endif

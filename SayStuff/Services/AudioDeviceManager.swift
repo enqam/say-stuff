@@ -70,12 +70,20 @@ class AudioDeviceManager: ObservableObject {
         setupDeviceChangeListener()
     }
 
+    /// Device changes are read on this queue: each property read is a round trip to coreaudiod
+    /// (1-5 ms per scan, 60 ms seen), and Core Audio announces several changes per dictation
+    /// as the mic and sounds start and stop.
+    private let scanQueue = DispatchQueue(label: "com.saystuff.devices", qos: .userInitiated)
+
     func refreshDevices() {
-        inputDevices = Self.currentInputDevices()
-        print("[AudioDeviceManager] Found \(inputDevices.count) input devices:")
-        for device in inputDevices {
-            print("  - \(device.name) (UID: \(device.uid))")
-        }
+        update(Self.currentInputDevices())
+    }
+
+    /// Publishes only real changes, so a dictation's temporary devices don't wake the UI.
+    private func update(_ devices: [AudioDevice]) {
+        func key(_ list: [AudioDevice]) -> [String] { list.map { "\($0.id)|\($0.uid)|\($0.name)" } }
+        guard key(devices) != key(inputDevices) else { return }
+        inputDevices = devices
     }
 
     /// Safe to call from any thread.
@@ -255,9 +263,10 @@ class AudioDeviceManager: ObservableObject {
         AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
             &propertyAddress,
-            DispatchQueue.main
+            scanQueue
         ) { [weak self] _, _ in
-            self?.refreshDevices()
+            let devices = Self.currentInputDevices()
+            DispatchQueue.main.async { self?.update(devices) }
         }
     }
 }

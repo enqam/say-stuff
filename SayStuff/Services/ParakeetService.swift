@@ -93,7 +93,17 @@ actor ParakeetService {
             result = try await manager.transcribe(url, decoderState: &state, language: hint)
         }
         trace?.mark("parakeet.inferenceFinished")
-        return Result(text: result.text, coldStart: cold)
+        return Result(text: Self.ampersands(in: result.text), coldStart: cold)
+    }
+
+    /// "<unk>" is the vocabulary's unknown token (id 0), and the vocabulary has no "&": Ultra
+    /// writes "<unk>" where "&" goes ("L and M" came out "L<unk>M", "R and D" "R<unk>D",
+    /// "Johnson and Johnson" "Johnson <unk> Johnson"; v3 drops it: "LM"). When it spells the
+    /// word too ("L<unk> and M") the token is dropped. (A Latin language forced on Russian
+    /// speech also yields strings of it: the script filter takes the ASCII "<unk>" for English.)
+    nonisolated static func ampersands(in text: String) -> String {
+        text.replacingOccurrences(of: #"<unk>(?=\s*and\b)"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: "<unk>", with: "&")
     }
 
     func unload(reason: String = "model selection changed") {

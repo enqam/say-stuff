@@ -31,9 +31,11 @@ final class MenuPanel {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient, .ignoresCycle]
 
         makeContent = { resize, maximumHeight in AnyView(content(resize, maximumHeight)) }
+        // Empty while closed: a hidden menu still observes the app's state and rebuilt itself
+        // (model files, spending, mics) on every dictation phase change, on the main thread
+        // while the HUD animates (seen in samples).
         host = NSHostingView(rootView: AnyView(EmptyView()))
         panel.contentView = host
-        host.rootView = makeContent({ [weak self] height in self?.setHeight(height) }, 720)
     }
 
     func toggle(from button: NSStatusBarButton) {
@@ -76,7 +78,12 @@ final class MenuPanel {
             context.duration = 0.1
             panel.animator().alphaValue = 0
         }, completionHandler: { [weak self] in
-            Task { @MainActor in self?.panel.orderOut(nil) }
+            Task { @MainActor in
+                // Reopened while fading out: leave it up.
+                guard let self, self.clickMonitor == nil else { return }
+                self.panel.orderOut(nil)
+                self.host.rootView = AnyView(EmptyView())
+            }
         })
     }
 

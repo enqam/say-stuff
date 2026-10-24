@@ -21,6 +21,7 @@ struct CorrectionLearningSession {
     private var lastChange: Date
     private var analyzedValue: String
     private var learned: Set<String> = []
+    private var repeatChecked: Set<String> = []
     private(set) var finished = false
     private let settleDelay: TimeInterval = 1.5
 
@@ -76,11 +77,23 @@ struct CorrectionLearningSession {
             let term = new.joined(separator: " ")
             let key = heard.lowercased() + "\u{0}" + term.lowercased()
             guard !learned.contains(key) else { continue }
-            let rejection = rejection(old: heard, new: term)
-            log.notice("Correction \(heard, privacy: .private) → \(term, privacy: .private): \(rejection ?? "learned", privacy: .public)")
+            var rejection = rejection(old: heard, new: term)
+            var ordinary = false
+            // Swapping one real word for another ("discreet" → "discrete") is usually grammar,
+            // but making the same swap after a second dictation means the model keeps getting it wrong.
+            if rejection == "ordinary word", !repeatChecked.contains(key) {
+                repeatChecked.insert(key)
+                if Self.ordinaryEdits.seenBefore(key) {
+                    rejection = nil
+                    ordinary = true
+                }
+            }
+            log.notice("Correction \(heard, privacy: .private) → \(term, privacy: .private): \(rejection ?? (ordinary ? "learned on repeat" : "learned"), privacy: .public)")
             guard rejection == nil else { continue }
             learned.insert(key)
-            result.append(Correction(term: term, heardAs: heard))
+            // Lowercase, so a sentence-start fix doesn't capitalize the word mid-sentence later.
+            result.append(ordinary ? Correction(term: term.lowercased(), heardAs: heard.lowercased())
+                                   : Correction(term: term, heardAs: heard))
         }
         return result
     }
@@ -132,8 +145,8 @@ struct CorrectionLearningSession {
         guard new.count >= 3 else { return "too short" }
         // Must be a respelling of what was heard, or sound like it: Parakeet writes names
         // as ordinary words that sound right ("Quad" for "Claude").
-        guard Self.similarity(old.lowercased(), new.lowercased()) >= 0.45
-                || Self.similarity(Self.soundKey(old), Self.soundKey(new)) >= 0.6 else { return "different word" }
+        guard SoundAlike.similarity(old.lowercased(), new.lowercased()) >= 0.45
+                || SoundAlike.similarity(SoundAlike.soundKey(old), SoundAlike.soundKey(new)) >= 0.6 else { return "different word" }
         // Keep explicitly listed names distinct (for example Grok and Groq).
         guard !vocabulary.contains(old.lowercased()) else { return "replaced a dictionary word" }
         // Explicit dictionary terms remain learnable even if macOS already knows
@@ -147,35 +160,25 @@ struct CorrectionLearningSession {
         return unusual ? nil : "ordinary word"
     }
 
-    /// Consonant skeleton of how a word sounds: "Quad" → "kd", "Claude" → "kld".
-    static func soundKey(_ text: String) -> String {
-        var s = text.lowercased().filter(\.isLetter)
-        for (from, to) in [("ph", "f"), ("ck", "k"), ("qu", "k"), ("gh", "g"), ("x", "ks"),
-                           ("c", "k"), ("q", "k"), ("z", "s")] {
-            s = s.replacingOccurrences(of: from, with: to)
-        }
-        var key = ""
-        for (index, char) in s.enumerated() {
-            if index > 0, "aeiouyhw".contains(char) { continue }
-            if key.last != char { key.append(char) }
-        }
-        return key
-    }
+    static var ordinaryEdits = OrdinaryEdits()
 
-    private static func similarity(_ a: String, _ b: String) -> Double {
-        let a = Array(a), b = Array(b)
-        guard !a.isEmpty, !b.isEmpty else { return 0 }
-        var row = Array(0...b.count)
-        for i in 1...a.count {
-            var previous = row[0]
-            row[0] = i
-            for j in 1...b.count {
-                let current = row[j]
-                row[j] = a[i - 1] == b[j - 1] ? previous : min(previous, row[j], row[j - 1]) + 1
-                previous = current
-            }
+    /// Real-word edits seen in earlier dictations, kept across launches.
+    struct OrdinaryEdits {
+        private let defaults: UserDefaults
+        private let defaultsKey = "ordinaryCorrectionEdits"
+        private let limit = 200
+
+        init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+
+        /// Records the edit; true if an earlier dictation already had it (then it's forgotten).
+        mutating func seenBefore(_ key: String) -> Bool {
+            var keys = defaults.stringArray(forKey: defaultsKey) ?? []
+            let seen = keys.contains(key)
+            keys.removeAll { $0 == key }
+            if !seen { keys.append(key) }
+            defaults.set(Array(keys.suffix(limit)), forKey: defaultsKey)
+            return seen
         }
-        return 1 - Double(row[b.count]) / Double(max(a.count, b.count))
     }
 
     private static func words(_ text: String) -> [String] {

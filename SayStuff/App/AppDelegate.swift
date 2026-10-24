@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let dictation = DictationController.shared
     private var cancellables = Set<AnyCancellable>()
     private var statusIconShowsRecording = false
+    private var idleIconWork: DispatchWorkItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Self.shared = self
@@ -82,10 +83,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let button = statusItem.button else { return }
         switch phase {
         case .idle:
-            guard statusIconShowsRecording else { return }
-            statusIconShowsRecording = false
-            button.image = idleIcon
+            guard statusIconShowsRecording, idleIconWork == nil else { return }
+            // Swapping the image waits on the WindowServer (~6 ms measured, longer when it's
+            // busy), so it waits until the pasted-text outro has landed.
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.idleIconWork = nil
+                self.statusIconShowsRecording = false
+                button.image = self.idleIcon
+            }
+            idleIconWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
         case .recording:
+            idleIconWork?.cancel()
+            idleIconWork = nil
             guard !statusIconShowsRecording else { return }
             statusIconShowsRecording = true
             button.image = activeIcon
