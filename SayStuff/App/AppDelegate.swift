@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         #endif
         setupStatusItem()
+        AutoSwitchGuard.shared.start()
         dictation.start()
 
         dictation.$phase

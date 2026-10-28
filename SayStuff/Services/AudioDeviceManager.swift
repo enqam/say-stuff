@@ -270,3 +270,113 @@ class AudioDeviceManager: ObservableObject {
         }
     }
 }
+
+/// Undoes macOS's own device switches that SayStuff's users never want:
+/// - a mic plugged into the headphone jack also shows up as "External Headphones", and macOS
+///   makes it the output (plug-in, AirPods disconnecting, login). Plain headphones (no mic on
+///   the jack) are left alone.
+/// - AirPods and iPhones become the system input when they connect; the Sound pane's level
+///   meter then opens their mic, which drops AirPods playback to call quality.
+/// A switch soon after devices come or go is macOS's; one chosen in Sound settings later is kept.
+final class AutoSwitchGuard {
+    static let shared = AutoSwitchGuard()
+
+    private static let jackOutputUID = "BuiltInHeadphoneOutputDevice"
+    private static let jackInputUID = "BuiltInHeadphoneInputDevice"
+    private static let automaticWindow: TimeInterval = 3
+
+    private let queue = DispatchQueue(label: "com.saystuff.auto-switch-guard", qos: .userInitiated)
+    private var lastDeviceChange = Date.distantPast
+    /// What to go back to: the last default that wasn't unwanted.
+    private var lastGoodOutput: AudioDeviceID?
+    private var lastGoodInput: AudioDeviceID?
+
+    func start() {
+        queue.async { [self] in
+            // Whatever macOS picked before launch (login, AirPods connecting) counts as automatic.
+            lastDeviceChange = Date()
+            listen(kAudioHardwarePropertyDevices) { [self] in
+                lastDeviceChange = Date()
+                check()
+            }
+            listen(kAudioHardwarePropertyDefaultOutputDevice) { [self] in check() }
+            listen(kAudioHardwarePropertyDefaultInputDevice) { [self] in check() }
+            check()
+        }
+    }
+
+    private func check() {
+        let automatic = Date().timeIntervalSince(lastDeviceChange) < Self.automaticWindow
+
+        if let output = Self.defaultDevice(kAudioHardwarePropertyDefaultOutputDevice) {
+            if Self.uid(output) != Self.jackOutputUID || Self.device(uid: Self.jackInputUID) == nil {
+                lastGoodOutput = output
+            } else if automatic, let replacement = Self.present(lastGoodOutput) ?? Self.device(uid: "BuiltInSpeakerDevice") {
+                Self.setDefault(kAudioHardwarePropertyDefaultOutputDevice, to: replacement)
+                if Self.defaultDevice(kAudioHardwarePropertyDefaultSystemOutputDevice) == output {
+                    Self.setDefault(kAudioHardwarePropertyDefaultSystemOutputDevice, to: replacement)
+                }
+            }
+        }
+
+        if let input = Self.defaultDevice(kAudioHardwarePropertyDefaultInputDevice) {
+            let devices = AudioDeviceManager.currentInputDevices()
+            if devices.first(where: { $0.id == input })?.isAutoSelectable ?? true {
+                lastGoodInput = input
+            } else if automatic, let replacement = Self.present(lastGoodInput)
+                        ?? AudioDeviceManager.microphone(preferredUID: nil, preferredName: nil)?.id {
+                Self.setDefault(kAudioHardwarePropertyDefaultInputDevice, to: replacement)
+            }
+        }
+    }
+
+    /// The device, if it's still connected.
+    private static func present(_ deviceID: AudioDeviceID?) -> AudioDeviceID? {
+        deviceID.flatMap { uid($0) != nil ? $0 : nil }
+    }
+
+    private func listen(_ selector: AudioObjectPropertySelector, _ handler: @escaping () -> Void) {
+        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, queue) { _, _ in handler() }
+    }
+
+    private static func defaultDevice(_ selector: AudioObjectPropertySelector) -> AudioDeviceID? {
+        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var deviceID: AudioDeviceID = 0
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
+        return status == noErr && deviceID != 0 ? deviceID : nil
+    }
+
+    private static func setDefault(_ selector: AudioObjectPropertySelector, to deviceID: AudioDeviceID) {
+        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var deviceID = deviceID
+        AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil,
+                                   UInt32(MemoryLayout<AudioDeviceID>.size), &deviceID)
+    }
+
+    private static func uid(_ deviceID: AudioDeviceID) -> String? {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceUID, mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var uid: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(deviceID, &address, 0, nil, &size, &uid) == noErr, let uid else { return nil }
+        return uid.takeRetainedValue() as String
+    }
+
+    private static func device(uid: String) -> AudioDeviceID? {
+        var cfUID = uid as CFString
+        var deviceID: AudioDeviceID = 0
+        var translation = AudioValueTranslation(
+            mInputData: &cfUID, mInputDataSize: UInt32(MemoryLayout<CFString>.size),
+            mOutputData: &deviceID, mOutputDataSize: UInt32(MemoryLayout<AudioDeviceID>.size))
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDeviceForUID, mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var size = UInt32(MemoryLayout<AudioValueTranslation>.size)
+        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &translation)
+        return status == noErr && deviceID != kAudioObjectUnknown ? deviceID : nil
+    }
+}
