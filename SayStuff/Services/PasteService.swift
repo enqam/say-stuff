@@ -149,13 +149,16 @@ enum TextFocus {
         } else if notTextRoles.contains(role) {
             // Checked before the attribute tests: Electron buttons report a settable value.
             result = .none
+        } else if chromium {
+            // Chromium gives page content a selection range too (a clicked chat feed in Claude
+            // came back as an AXGroup with one), so only an editable ancestor counts; a field
+            // reports one, itself included.
+            var editable: AnyObject?
+            result = AXUIElementCopyAttributeValue(element, "AXEditableAncestor" as CFString, &editable) == .success
+                && editable != nil ? .text : .none
         } else if AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &range) == .success
             || (AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue) {
             result = .text
-        } else if chromium && role == kAXGroupRole {
-            // Chromium reports its editable fields as text fields or areas (with a selection
-            // range), so a focused group there is page content, not a field.
-            result = .none
         } else {
             result = .unknown
         }
